@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://casper.dev/schemas/rds_resize.schema.json",
+  "title": "RDSResizeProposal",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "db_instance_identifier",
+    "region",
+    "current_instance_class",
+    "target_instance_class",
+    "apply_immediately",
+    "success_criteria",
+    "reasoning"
+  ],
+  "properties": {
+    "db_instance_identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 63,
+      "pattern": "^[a-zA-Z][a-zA-Z0-9-]*$"
+    },
+    "region": {
+      "type": "string",
+      "pattern": "^[a-z]{2}-[a-z]+-[0-9]+$"
+    },
+    "current_instance_class": {
+      "type": "string",
+      "pattern": "^db\\."
+    },
+    "target_instance_class": {
+      "type": "string",
+      "pattern": "^db\\."
+    },
+    "apply_immediately": {
+      "type": "boolean",
+      "const": true
+    },
+    "success_criteria": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["metric", "threshold_percent", "verification_window"],
+      "properties": {
+        "metric": {
+          "type": "string",
+          "enum": ["CPUUtilization"]
+        },
+        "threshold_percent": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "verification_window": {
+          "type": "string",
+          "pattern": "^[0-9]+(s|m|h)$"
+        }
+      }
+    },
+    "reasoning": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

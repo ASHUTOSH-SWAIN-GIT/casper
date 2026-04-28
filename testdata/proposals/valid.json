@@ -1,0 +1,13 @@
+{
+  "db_instance_identifier": "orders-prod",
+  "region": "us-east-1",
+  "current_instance_class": "db.r6g.large",
+  "target_instance_class": "db.r6g.xlarge",
+  "apply_immediately": true,
+  "success_criteria": {
+    "metric": "CPUUtilization",
+    "threshold_percent": 60,
+    "verification_window": "5m"
+  },
+  "reasoning": "CPU sustained at 90% over the last 30 minutes"
+}
