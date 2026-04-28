@@ -39,18 +39,16 @@ func rdsResizeForward(p action.RDSResizeProposal, h action.ProposalHash) Executi
 		},
 		{
 			ID:          "preconditions",
-			Kind:        StepDecision,
-			Description: "Re-check all preconditions against captured pre-state",
+			Kind:        StepVerify,
+			Description: "Re-check preconditions against captured pre-state",
 			OnFailure:   OnFailureAbort,
-			Decision: &Decision{
-				Checks: []string{
-					"instance_exists",
-					"status_available",
-					"no_pending_modifications",
-					"current_class_matches",
-					"target_differs_from_current",
-					"target_valid_for_engine",
-					"not_in_transient_state",
+			Verify: &Verify{
+				SourceStepID: "describe-pre",
+				Assertions: []Predicate{
+					{Path: "DBInstances[0].DBInstanceIdentifier", Operator: "eq", Value: p.DBInstanceIdentifier},
+					{Path: "DBInstances[0].DBInstanceStatus", Operator: "eq", Value: "available"},
+					{Path: "DBInstances[0].PendingModifiedValues", Operator: "empty"},
+					{Path: "DBInstances[0].DBInstanceClass", Operator: "eq", Value: p.CurrentInstanceClass},
 				},
 			},
 		},

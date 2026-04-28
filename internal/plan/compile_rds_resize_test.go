@@ -35,7 +35,7 @@ func TestCompile_ForwardHasEightStepsInOrder(t *testing.T) {
 
 	wantKinds := []StepKind{
 		StepAWSAPICall, // describe-pre
-		StepDecision,   // preconditions
+		StepVerify,     // preconditions
 		StepAWSAPICall, // modify
 		StepPoll,       // poll-modifying
 		StepPoll,       // poll-available

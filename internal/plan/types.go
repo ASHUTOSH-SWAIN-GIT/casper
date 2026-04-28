@@ -13,7 +13,6 @@ const (
 	StepAWSAPICall StepKind = "aws_api_call"
 	StepPoll       StepKind = "poll"
 	StepVerify     StepKind = "verify"
-	StepDecision   StepKind = "decision"
 	StepWait       StepKind = "wait"
 )
 
@@ -61,11 +60,14 @@ type Poll struct {
 	Interval  string    `json:"interval"`
 }
 
-// Verify asserts a list of predicates. APICall is optional — if nil,
-// the interpreter evaluates against the most recent captured state.
+// Verify asserts a list of predicates. Exactly one of APICall or
+// SourceStepID is set: APICall makes a fresh AWS call, SourceStepID
+// evaluates against the captured response of a prior step (used for
+// re-checking preconditions against pre-state without re-fetching).
 type Verify struct {
-	APICall    *APICall    `json:"api_call,omitempty"`
-	Assertions []Predicate `json:"assertions"`
+	APICall      *APICall    `json:"api_call,omitempty"`
+	SourceStepID string      `json:"source_step_id,omitempty"`
+	Assertions   []Predicate `json:"assertions"`
 }
 
 // Wait pauses for Duration. The step records the wall-clock time it
@@ -74,16 +76,9 @@ type Wait struct {
 	Duration string `json:"duration"`
 }
 
-// Decision is a non-AWS step: a named bundle of precondition checks
-// the interpreter runs against captured state. The checks themselves
-// are referenced by name; the actual logic lives in the interpreter.
-type Decision struct {
-	Checks []string `json:"checks"`
-}
-
 // Step is one unit of work in an ExecutionPlan. Exactly one of the
-// kind-specific fields (APICall, Poll, Verify, Wait, Decision) is
-// populated, determined by Kind.
+// kind-specific fields (APICall, Poll, Verify, Wait) is populated,
+// determined by Kind.
 type Step struct {
 	ID          string    `json:"id"`
 	Kind        StepKind  `json:"kind"`
@@ -91,11 +86,10 @@ type Step struct {
 	Timeout     string    `json:"timeout,omitempty"`
 	OnFailure   OnFailure `json:"on_failure"`
 
-	APICall  *APICall  `json:"api_call,omitempty"`
-	Poll     *Poll     `json:"poll,omitempty"`
-	Verify   *Verify   `json:"verify,omitempty"`
-	Wait     *Wait     `json:"wait,omitempty"`
-	Decision *Decision `json:"decision,omitempty"`
+	APICall *APICall `json:"api_call,omitempty"`
+	Poll    *Poll    `json:"poll,omitempty"`
+	Verify  *Verify  `json:"verify,omitempty"`
+	Wait    *Wait    `json:"wait,omitempty"`
 }
 
 // ExecutionPlan is the data the interpreter consumes. Every plan is
