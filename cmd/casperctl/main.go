@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/config"
 
 	"github.com/ASHUTOSH-SWAIN-GIT/casper/internal/action"
 	"github.com/ASHUTOSH-SWAIN-GIT/casper/internal/audit"
 	"github.com/ASHUTOSH-SWAIN-GIT/casper/internal/awsx"
+	"github.com/ASHUTOSH-SWAIN-GIT/casper/internal/identity"
 	"github.com/ASHUTOSH-SWAIN-GIT/casper/internal/interpreter"
 	"github.com/ASHUTOSH-SWAIN-GIT/casper/internal/plan"
 	"github.com/ASHUTOSH-SWAIN-GIT/casper/internal/policy"
@@ -217,6 +219,39 @@ func runRun(args []string) error {
 	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(p.Region))
 	if err != nil {
 		return fmt.Errorf("load aws config: %w", err)
+	}
+
+	// Identity broker — if CASPER_ROLE_ARN + CASPER_EXTERNAL_ID are set,
+	// mint per-action scoped credentials with a 15-minute TTL. Otherwise
+	// fall back to the default credential chain, which is fine for local
+	// development but means bounded authority is not enforced.
+	if roleARN := os.Getenv("CASPER_ROLE_ARN"); roleARN != "" {
+		extID := os.Getenv("CASPER_EXTERNAL_ID")
+		if extID == "" {
+			return fmt.Errorf("CASPER_EXTERNAL_ID is required when CASPER_ROLE_ARN is set")
+		}
+		broker, err := identity.New(cfg, identity.Config{RoleARN: roleARN, ExternalID: extID})
+		if err != nil {
+			return fmt.Errorf("identity broker: %w", err)
+		}
+		sess, err := broker.MintForRDSResize(ctx, p)
+		if err != nil {
+			return fmt.Errorf("mint credentials: %w", err)
+		}
+		cfg = sess.Cfg
+		if _, err := store.Append(ctx, audit.KindCredentialsMinted, h, map[string]any{
+			"role_arn":     roleARN,
+			"session_name": sess.SessionName,
+			"policy_hash":  sess.PolicyHash,
+			"ttl_seconds":  int(identity.SessionTTL.Seconds()),
+			"expires_at":   sess.Expires.UTC().Format("2006-01-02T15:04:05Z07:00"),
+		}); err != nil {
+			return fmt.Errorf("audit credentials_minted: %w", err)
+		}
+		fmt.Fprintf(os.Stderr, "identity: minted scoped credentials %s (policy %s..., expires %s)\n",
+			sess.SessionName, sess.PolicyHash[:12], sess.Expires.Format(time.RFC3339))
+	} else {
+		fmt.Fprintln(os.Stderr, "identity: no CASPER_ROLE_ARN — using default credentials (bounded authority NOT enforced)")
 	}
 
 	interp := &interpreter.Interpreter{Client: awsx.New(cfg), Audit: store}
