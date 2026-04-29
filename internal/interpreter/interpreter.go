@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ASHUTOSH-SWAIN-GIT/casper/internal/audit"
 	"github.com/ASHUTOSH-SWAIN-GIT/casper/internal/plan"
 )
 
@@ -14,10 +15,12 @@ import (
 // It walks an ExecutionPlan one step at a time, captures every call
 // verbatim, and stops on the first fatal failure.
 //
-// Sleep and Now are injectable for tests. In production they default
-// to time.Sleep and time.Now.
+// Sleep and Now are injectable for tests. Audit is optional — when set,
+// the interpreter writes step_started / step_completed / step_failed
+// events to it; when nil, the interpreter is silent.
 type Interpreter struct {
 	Client Client
+	Audit  audit.Store
 	Sleep  func(time.Duration)
 	Now    func() time.Time
 }
@@ -31,18 +34,81 @@ func (i *Interpreter) Run(ctx context.Context, p plan.ExecutionPlan) ([]StepResu
 	results := make([]StepResult, 0, len(p.Steps))
 
 	for _, step := range p.Steps {
+		i.recordStepStart(ctx, p, step)
 		r := i.runStep(ctx, step, captures)
 		results = append(results, r)
+		i.recordStepEnd(ctx, p, r)
 
 		if r.Status == StepStatusFailed {
+			i.recordPlanEnd(ctx, p, false, fmt.Sprintf("step %q failed: %s", step.ID, r.Error))
 			return results, fmt.Errorf("step %q failed: %s", step.ID, r.Error)
 		}
-		// If the step produced a response, store it for downstream verifies.
 		if len(r.Calls) > 0 {
 			captures[step.ID] = r.Calls[len(r.Calls)-1].Response
 		}
 	}
+	i.recordPlanEnd(ctx, p, true, "")
 	return results, nil
+}
+
+func (i *Interpreter) recordStepStart(ctx context.Context, p plan.ExecutionPlan, s plan.Step) {
+	if i.Audit == nil {
+		return
+	}
+	_, _ = i.Audit.Append(ctx, audit.KindStepStarted, p.ProposalHash, map[string]any{
+		"plan_kind":   string(p.Kind),
+		"step_id":     s.ID,
+		"step_kind":   string(s.Kind),
+		"description": s.Description,
+	})
+}
+
+func (i *Interpreter) recordStepEnd(ctx context.Context, p plan.ExecutionPlan, r StepResult) {
+	if i.Audit == nil {
+		return
+	}
+	calls := make([]map[string]any, len(r.Calls))
+	for k, c := range r.Calls {
+		calls[k] = map[string]any{
+			"request":        c.Request,
+			"response_body":  c.Response.Body,
+			"aws_request_id": c.Response.RequestID,
+			"error":          c.Error,
+		}
+	}
+	payload := map[string]any{
+		"plan_kind":   string(p.Kind),
+		"step_id":     r.StepID,
+		"status":      string(r.Status),
+		"duration_ms": r.FinishedAt.Sub(r.StartedAt).Milliseconds(),
+		"calls":       calls,
+	}
+	if r.Error != "" {
+		payload["error"] = r.Error
+	}
+	kind := audit.KindStepCompleted
+	if r.Status == StepStatusFailed {
+		kind = audit.KindStepFailed
+	}
+	_, _ = i.Audit.Append(ctx, kind, p.ProposalHash, payload)
+}
+
+func (i *Interpreter) recordPlanEnd(ctx context.Context, p plan.ExecutionPlan, ok bool, errMsg string) {
+	if i.Audit == nil {
+		return
+	}
+	kind := audit.KindPlanCompleted
+	if !ok {
+		kind = audit.KindPlanFailed
+	}
+	payload := map[string]any{
+		"plan_kind":   string(p.Kind),
+		"action_type": p.ActionType,
+	}
+	if errMsg != "" {
+		payload["error"] = errMsg
+	}
+	_, _ = i.Audit.Append(ctx, kind, p.ProposalHash, payload)
 }
 
 func (i *Interpreter) runStep(ctx context.Context, s plan.Step, captures map[string]Response) StepResult {
