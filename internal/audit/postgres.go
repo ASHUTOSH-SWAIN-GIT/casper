@@ -2,33 +2,42 @@ package audit
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
+	_ "github.com/jackc/pgx/v5/stdlib" // registers "pgx" driver for goose's database/sql access
+	"github.com/pressly/goose/v3"
 
 	"github.com/ASHUTOSH-SWAIN-GIT/casper/internal/action"
+	auditdb "github.com/ASHUTOSH-SWAIN-GIT/casper/internal/audit/db"
+	"github.com/ASHUTOSH-SWAIN-GIT/casper/migrations"
 )
 
-// PostgresStore is the durable Store. It implements the same hash-chain
-// contract as MemoryStore, so callers (interpreter, CLI) don't care
-// which one they got.
+// PostgresStore implements Store on top of pgxpool, with goose for
+// migrations and sqlc-generated queries (internal/audit/db). The chain
+// logic itself lives in chain.go and is shared with MemoryStore — only
+// the persistence backend differs.
 //
-// Append serializes via a transaction-scoped advisory lock so concurrent
-// processes can't race the chain. Time is truncated to microseconds —
-// Postgres' TIMESTAMPTZ precision — so a value written and read back
-// hashes identically.
+// Append serializes via pg_advisory_xact_lock(0) so concurrent writers
+// can't race the chain. Time is truncated to microseconds — Postgres'
+// TIMESTAMPTZ precision — so values written and read back hash identically.
 type PostgresStore struct {
 	pool *pgxpool.Pool
 	now  func() time.Time
 }
 
-// NewPostgresStore connects to dsn, runs the schema migration, and
+// NewPostgresStore migrates to the latest schema, opens a pool, and
 // returns a ready store. Caller must Close() when done.
 func NewPostgresStore(ctx context.Context, dsn string, now func() time.Time) (*PostgresStore, error) {
+	if err := runMigrations(ctx, dsn); err != nil {
+		return nil, fmt.Errorf("migrate: %w", err)
+	}
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("connect: %w", err)
@@ -41,10 +50,6 @@ func NewPostgresStore(ctx context.Context, dsn string, now func() time.Time) (*P
 	if s.now == nil {
 		s.now = time.Now
 	}
-	if err := s.migrate(ctx); err != nil {
-		pool.Close()
-		return nil, fmt.Errorf("migrate: %w", err)
-	}
 	return s, nil
 }
 
@@ -52,40 +57,36 @@ func (s *PostgresStore) Close() {
 	s.pool.Close()
 }
 
-const schemaSQL = `
-CREATE TABLE IF NOT EXISTS audit_events (
-    id            BIGSERIAL PRIMARY KEY,
-    proposal_hash TEXT        NOT NULL,
-    kind          TEXT        NOT NULL,
-    payload       JSONB       NOT NULL,
-    prev_hash     TEXT        NOT NULL DEFAULT '',
-    hash          TEXT        NOT NULL,
-    at            TIMESTAMPTZ NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_audit_events_proposal_hash
-    ON audit_events(proposal_hash);
-`
-
-func (s *PostgresStore) migrate(ctx context.Context) error {
-	_, err := s.pool.Exec(ctx, schemaSQL)
-	return err
+// runMigrations opens a short-lived database/sql handle (goose's API
+// signature) and applies every pending migration in migrations/.
+func runMigrations(ctx context.Context, dsn string) error {
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		return fmt.Errorf("open sql: %w", err)
+	}
+	defer db.Close()
+	goose.SetBaseFS(migrations.FS)
+	if err := goose.SetDialect("postgres"); err != nil {
+		return fmt.Errorf("dialect: %w", err)
+	}
+	// Silence goose's stdout chatter; we have our own audit log.
+	goose.SetLogger(goose.NopLogger())
+	return goose.UpContext(ctx, db, ".")
 }
 
 func (s *PostgresStore) Append(ctx context.Context, kind Kind, ph action.ProposalHash, payload map[string]any) (Event, error) {
 	var event Event
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
-		// Serialize all chain appends. Constant key 0 means "the global
-		// audit chain". Released automatically at transaction end.
-		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(0)"); err != nil {
+		q := auditdb.New(tx)
+		if err := q.AdvisoryLockChain(ctx); err != nil {
 			return fmt.Errorf("advisory lock: %w", err)
 		}
-
-		var prev string
-		err := tx.QueryRow(ctx,
-			`SELECT hash FROM audit_events ORDER BY id DESC LIMIT 1`,
-		).Scan(&prev)
+		prev, err := q.GetLatestHash(ctx)
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return fmt.Errorf("read prev hash: %w", err)
+		}
+		if errors.Is(err, pgx.ErrNoRows) {
+			prev = ""
 		}
 
 		event = Event{
@@ -105,13 +106,19 @@ func (s *PostgresStore) Append(ctx context.Context, kind Kind, ph action.Proposa
 		if err != nil {
 			return fmt.Errorf("marshal payload: %w", err)
 		}
-
-		return tx.QueryRow(ctx, `
-            INSERT INTO audit_events (proposal_hash, kind, payload, prev_hash, hash, at)
-            VALUES ($1, $2, $3, $4, $5, $6)
-            RETURNING id`,
-			string(ph), string(kind), payloadJSON, prev, h, event.At,
-		).Scan(&event.ID)
+		id, err := q.InsertEvent(ctx, auditdb.InsertEventParams{
+			ProposalHash: string(ph),
+			Kind:         string(kind),
+			Payload:      payloadJSON,
+			PrevHash:     prev,
+			Hash:         h,
+			At:           pgtype.Timestamptz{Time: event.At, Valid: true},
+		})
+		if err != nil {
+			return fmt.Errorf("insert event: %w", err)
+		}
+		event.ID = id
+		return nil
 	})
 	if err != nil {
 		return Event{}, err
@@ -120,45 +127,26 @@ func (s *PostgresStore) Append(ctx context.Context, kind Kind, ph action.Proposa
 }
 
 func (s *PostgresStore) List(ctx context.Context, ph action.ProposalHash) ([]Event, error) {
-	rows, err := s.pool.Query(ctx, `
-        SELECT id, proposal_hash, kind, payload, prev_hash, hash, at
-        FROM audit_events
-        WHERE proposal_hash = $1
-        ORDER BY id`,
-		string(ph),
-	)
+	q := auditdb.New(s.pool)
+	rows, err := q.ListEventsByProposal(ctx, string(ph))
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var out []Event
-	for rows.Next() {
-		e, err := scanEvent(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, e)
-	}
-	return out, rows.Err()
+	return convertRows(rows)
 }
 
 func (s *PostgresStore) Verify(ctx context.Context) error {
-	rows, err := s.pool.Query(ctx, `
-        SELECT id, proposal_hash, kind, payload, prev_hash, hash, at
-        FROM audit_events ORDER BY id`,
-	)
+	q := auditdb.New(s.pool)
+	rows, err := q.ListAllEvents(ctx)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
-
+	events, err := convertRows(rows)
+	if err != nil {
+		return err
+	}
 	prev := ""
-	for rows.Next() {
-		e, err := scanEvent(rows)
-		if err != nil {
-			return err
-		}
+	for _, e := range events {
 		if e.PrevHash != prev {
 			return fmt.Errorf("event #%d (%s): prev_hash=%q want %q", e.ID, e.Kind, e.PrevHash, prev)
 		}
@@ -171,22 +159,25 @@ func (s *PostgresStore) Verify(ctx context.Context) error {
 		}
 		prev = e.Hash
 	}
-	return rows.Err()
+	return nil
 }
 
-func scanEvent(rows pgx.Rows) (Event, error) {
-	var e Event
-	var ph string
-	var kind string
-	var payload []byte
-	if err := rows.Scan(&e.ID, &ph, &kind, &payload, &e.PrevHash, &e.Hash, &e.At); err != nil {
-		return Event{}, err
+func convertRows(rows []auditdb.AuditEvent) ([]Event, error) {
+	out := make([]Event, 0, len(rows))
+	for _, r := range rows {
+		var payload map[string]any
+		if err := json.Unmarshal(r.Payload, &payload); err != nil {
+			return nil, fmt.Errorf("unmarshal payload (event #%d): %w", r.ID, err)
+		}
+		out = append(out, Event{
+			ID:           r.ID,
+			ProposalHash: action.ProposalHash(r.ProposalHash),
+			Kind:         Kind(r.Kind),
+			Payload:      payload,
+			PrevHash:     r.PrevHash,
+			Hash:         r.Hash,
+			At:           r.At.Time.UTC(),
+		})
 	}
-	e.ProposalHash = action.ProposalHash(ph)
-	e.Kind = Kind(kind)
-	if err := json.Unmarshal(payload, &e.Payload); err != nil {
-		return Event{}, fmt.Errorf("unmarshal payload: %w", err)
-	}
-	e.At = e.At.UTC()
-	return e, nil
+	return out, nil
 }
