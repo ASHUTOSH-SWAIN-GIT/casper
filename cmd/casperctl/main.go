@@ -141,7 +141,12 @@ func runRun(args []string) error {
 		return fmt.Errorf("load aws config: %w", err)
 	}
 
-	store := audit.NewMemoryStore(nil)
+	store, closeStore, err := openAuditStore(ctx)
+	if err != nil {
+		return fmt.Errorf("open audit store: %w", err)
+	}
+	defer closeStore()
+
 	if _, err := store.Append(ctx, audit.KindProposed, h, map[string]any{
 		"action_type":            "rds_resize",
 		"db_instance_identifier": p.DBInstanceIdentifier,
@@ -189,7 +194,21 @@ func runRun(args []string) error {
 	return nil
 }
 
-func dumpAudit(s *audit.MemoryStore, h action.ProposalHash) error {
+func openAuditStore(ctx context.Context) (audit.Store, func(), error) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		fmt.Fprintln(os.Stderr, "audit: in-memory store (set DATABASE_URL to persist)")
+		return audit.NewMemoryStore(nil), func() {}, nil
+	}
+	s, err := audit.NewPostgresStore(ctx, dsn, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	fmt.Fprintln(os.Stderr, "audit: postgres store")
+	return s, s.Close, nil
+}
+
+func dumpAudit(s audit.Store, h action.ProposalHash) error {
 	events, err := s.List(context.Background(), h)
 	if err != nil {
 		return fmt.Errorf("list audit: %w", err)
