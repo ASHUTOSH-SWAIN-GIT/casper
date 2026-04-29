@@ -1,0 +1,13 @@
+{
+  "intent": "orders-prod is at 90% CPU sustained over the last 30 minutes; needs more headroom",
+  "snapshot": {
+    "db_instance_identifier": "orders-prod",
+    "region": "us-east-1",
+    "current_instance_class": "db.r6g.large",
+    "engine": "postgres",
+    "engine_version": "16.4",
+    "status": "available",
+    "multi_az": true,
+    "recent_cpu_utilization": 90.5
+  }
+}

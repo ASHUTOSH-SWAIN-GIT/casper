@@ -27,6 +27,12 @@ go.work.sum
 # env file
 .env
 
+# Starling proposer event log (per-run SQLite)
+casper_proposer.db
+*.db-journal
+*.db-shm
+*.db-wal
+
 # Editor/IDE
 # .idea/
 # .vscode/

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -16,6 +17,9 @@ import (
 	"github.com/ASHUTOSH-SWAIN-GIT/casper/internal/interpreter"
 	"github.com/ASHUTOSH-SWAIN-GIT/casper/internal/plan"
 	"github.com/ASHUTOSH-SWAIN-GIT/casper/internal/policy"
+	"github.com/ASHUTOSH-SWAIN-GIT/casper/internal/proposer"
+
+	"github.com/jerkeyray/starling/eventlog"
 )
 
 const usage = `casperctl — Casper trust layer CLI
@@ -25,6 +29,8 @@ Usage:
   casperctl hash     <proposal.json>   Print the canonical proposal hash
   casperctl policy   <proposal.json>   Evaluate the proposal against policy
   casperctl compile  <proposal.json>   Compile forward + rollback plans (JSON)
+  casperctl propose  <request.json>    LLM intent + snapshot -> proposal JSON
+                                       (requires ANTHROPIC_API_KEY)
   casperctl run      <proposal.json>   Validate, gate on policy, execute on AWS
                                        (requires AWS credentials in env)
 `
@@ -47,6 +53,8 @@ func main() {
 		err = runCompile(args)
 	case "policy":
 		err = runPolicy(args)
+	case "propose":
+		err = runPropose(args)
 	case "run":
 		err = runRun(args)
 	case "-h", "--help", "help":
@@ -121,6 +129,68 @@ func runCompile(args []string) error {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(out)
+}
+
+func runPropose(args []string) error {
+	if len(args) != 1 {
+		return fmt.Errorf("expected one argument: <request.json>")
+	}
+	apiKey := os.Getenv("ANTHROPIC_API_KEY")
+	if apiKey == "" {
+		return fmt.Errorf("ANTHROPIC_API_KEY is required")
+	}
+	raw, err := os.ReadFile(args[0])
+	if err != nil {
+		return fmt.Errorf("read request: %w", err)
+	}
+	var req proposer.Request
+	if err := json.Unmarshal(raw, &req); err != nil {
+		return fmt.Errorf("parse request: %w", err)
+	}
+
+	logPath := os.Getenv("CASPER_PROPOSER_LOG")
+	if logPath == "" {
+		logPath = "casper_proposer.db"
+	}
+	starLog, err := eventlog.NewSQLite(logPath)
+	if err != nil {
+		return fmt.Errorf("open starling log: %w", err)
+	}
+	defer starLog.Close()
+
+	prop, err := proposer.New(proposer.Config{
+		APIKey: apiKey,
+		Log:    starLog,
+	})
+	if err != nil {
+		return fmt.Errorf("build proposer: %w", err)
+	}
+
+	ctx := context.Background()
+	res, err := prop.Propose(ctx, req)
+	if err != nil {
+		return fmt.Errorf("propose: %w", err)
+	}
+
+	// stderr — the human-readable summary.
+	fmt.Fprintf(os.Stderr,
+		"proposer: model=%s run_id=%s tokens=in:%d/out:%d cost=$%.4f duration=%s\n",
+		res.Model, res.RunID, res.InputTokens, res.OutputTokens, res.CostUSD, res.Duration,
+	)
+	fmt.Fprintf(os.Stderr, "proposal hash: %s\n", res.ProposalHash)
+
+	// stdout — the proposal JSON, ready to pipe into `casperctl run`.
+	var pretty bytes.Buffer
+	if err := json.Indent(&pretty, res.ProposalRaw, "", "  "); err != nil {
+		return err
+	}
+	if _, err := os.Stdout.Write(pretty.Bytes()); err != nil {
+		return err
+	}
+	if _, err := os.Stdout.Write([]byte("\n")); err != nil {
+		return err
+	}
+	return nil
 }
 
 func runPolicy(args []string) error {
