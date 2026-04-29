@@ -24,15 +24,16 @@ import (
 type Kind string
 
 const (
-	KindProposed       Kind = "proposed"
-	KindPlanCompiled   Kind = "plan_compiled"
-	KindStepStarted    Kind = "step_started"
-	KindStepCompleted  Kind = "step_completed"
-	KindStepFailed     Kind = "step_failed"
-	KindPlanCompleted  Kind = "plan_completed"
-	KindPlanFailed     Kind = "plan_failed"
-	KindRollbackBegun  Kind = "rollback_begun"
-	KindRollbackEnded  Kind = "rollback_ended"
+	KindProposed         Kind = "proposed"
+	KindPolicyEvaluated  Kind = "policy_evaluated"
+	KindPlanCompiled     Kind = "plan_compiled"
+	KindStepStarted      Kind = "step_started"
+	KindStepCompleted    Kind = "step_completed"
+	KindStepFailed       Kind = "step_failed"
+	KindPlanCompleted    Kind = "plan_completed"
+	KindPlanFailed       Kind = "plan_failed"
+	KindRollbackBegun    Kind = "rollback_begun"
+	KindRollbackEnded    Kind = "rollback_ended"
 )
 
 // Event is one row in the audit log. PrevHash and Hash are filled in

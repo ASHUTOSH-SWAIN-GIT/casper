@@ -13,6 +13,7 @@ import (
 	"github.com/ASHUTOSH-SWAIN-GIT/casper/internal/awsx"
 	"github.com/ASHUTOSH-SWAIN-GIT/casper/internal/interpreter"
 	"github.com/ASHUTOSH-SWAIN-GIT/casper/internal/plan"
+	"github.com/ASHUTOSH-SWAIN-GIT/casper/internal/policy"
 )
 
 const usage = `casperctl — Casper trust layer CLI
@@ -20,8 +21,9 @@ const usage = `casperctl — Casper trust layer CLI
 Usage:
   casperctl validate <proposal.json>   Validate a proposal against the schema
   casperctl hash     <proposal.json>   Print the canonical proposal hash
+  casperctl policy   <proposal.json>   Evaluate the proposal against policy
   casperctl compile  <proposal.json>   Compile forward + rollback plans (JSON)
-  casperctl run      <proposal.json>   Execute the plan against AWS
+  casperctl run      <proposal.json>   Validate, gate on policy, execute on AWS
                                        (requires AWS credentials in env)
 `
 
@@ -41,6 +43,8 @@ func main() {
 		err = runHash(args)
 	case "compile":
 		err = runCompile(args)
+	case "policy":
+		err = runPolicy(args)
 	case "run":
 		err = runRun(args)
 	case "-h", "--help", "help":
@@ -117,6 +121,32 @@ func runCompile(args []string) error {
 	return enc.Encode(out)
 }
 
+func runPolicy(args []string) error {
+	raw, err := readProposal(args)
+	if err != nil {
+		return err
+	}
+	if err := action.Validate(raw); err != nil {
+		return fmt.Errorf("invalid proposal: %w", err)
+	}
+	var p action.RDSResizeProposal
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return fmt.Errorf("decode proposal: %w", err)
+	}
+	ctx := context.Background()
+	engine, err := policy.NewEngine(ctx)
+	if err != nil {
+		return err
+	}
+	v, err := engine.EvaluateRDSResize(ctx, p)
+	if err != nil {
+		return err
+	}
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(v)
+}
+
 func runRun(args []string) error {
 	raw, err := readProposal(args)
 	if err != nil {
@@ -133,13 +163,8 @@ func runRun(args []string) error {
 	if err != nil {
 		return err
 	}
-	fwd, rb := plan.CompileRDSResize(p, h)
 
 	ctx := context.Background()
-	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(p.Region))
-	if err != nil {
-		return fmt.Errorf("load aws config: %w", err)
-	}
 
 	store, closeStore, err := openAuditStore(ctx)
 	if err != nil {
@@ -156,11 +181,42 @@ func runRun(args []string) error {
 	}); err != nil {
 		return fmt.Errorf("audit proposed: %w", err)
 	}
+
+	// Policy gate — between proposal and execution. Verdict is logged
+	// regardless of decision; only allow proceeds.
+	engine, err := policy.NewEngine(ctx)
+	if err != nil {
+		return fmt.Errorf("policy engine: %w", err)
+	}
+	verdict, err := engine.EvaluateRDSResize(ctx, p)
+	if err != nil {
+		return fmt.Errorf("policy evaluate: %w", err)
+	}
+	if _, err := store.Append(ctx, audit.KindPolicyEvaluated, h, map[string]any{
+		"decision": string(verdict.Decision),
+		"reason":   verdict.Reason,
+	}); err != nil {
+		return fmt.Errorf("audit policy_evaluated: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "policy: %s — %s\n", verdict.Decision, verdict.Reason)
+	if verdict.Decision != policy.DecisionAllow {
+		if err := dumpAudit(store, h); err != nil {
+			return err
+		}
+		return fmt.Errorf("policy %s: %s", verdict.Decision, verdict.Reason)
+	}
+
+	fwd, rb := plan.CompileRDSResize(p, h)
 	if _, err := store.Append(ctx, audit.KindPlanCompiled, h, map[string]any{
 		"forward_steps":  len(fwd.Steps),
 		"rollback_steps": len(rb.Steps),
 	}); err != nil {
 		return fmt.Errorf("audit plan_compiled: %w", err)
+	}
+
+	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(p.Region))
+	if err != nil {
+		return fmt.Errorf("load aws config: %w", err)
 	}
 
 	interp := &interpreter.Interpreter{Client: awsx.New(cfg), Audit: store}
