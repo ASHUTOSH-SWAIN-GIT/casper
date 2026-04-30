@@ -74,6 +74,8 @@ func detectActionType(raw []byte) (string, error) {
 		return "rds_modify_multi_az", nil
 	case probe["target_allocated_storage_gb"] != nil:
 		return "rds_storage_grow", nil
+	case probe["replica_db_instance_identifier"] != nil:
+		return "rds_create_read_replica", nil
 	}
 	return "", fmt.Errorf("could not detect action type from proposal shape (no recognizable discriminator field)")
 }
@@ -96,6 +98,8 @@ func validateForActionType(raw []byte, actionType string) error {
 		return action.ValidateRDSStorageGrow(raw)
 	case "rds_delete_snapshot":
 		return action.ValidateRDSDeleteSnapshot(raw)
+	case "rds_create_read_replica":
+		return action.ValidateRDSCreateReadReplica(raw)
 	default:
 		return fmt.Errorf("no validator registered for action type %q", actionType)
 	}

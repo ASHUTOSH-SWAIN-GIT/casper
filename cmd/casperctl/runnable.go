@@ -251,6 +251,33 @@ func buildRunnable(raw []byte) (*runnable, error) {
 			},
 		}, nil
 
+	case "rds_create_read_replica":
+		var p action.RDSCreateReadReplicaProposal
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return nil, fmt.Errorf("decode proposal: %w", err)
+		}
+		return &runnable{
+			ActionType: "rds_create_read_replica",
+			Hash:       h,
+			Region:     p.Region,
+			ProposalAuditPayload: map[string]any{
+				"action_type":                    "rds_create_read_replica",
+				"source_db_instance_identifier":  p.SourceDBInstanceIdentifier,
+				"replica_db_instance_identifier": p.ReplicaDBInstanceIdentifier,
+				"region":                         p.Region,
+				"replica_instance_class":         p.ReplicaInstanceClass,
+			},
+			EvaluatePolicy: func(ctx context.Context, e *policy.Engine) (policy.Verdict, error) {
+				return e.EvaluateRDSCreateReadReplica(ctx, p)
+			},
+			Compile: func() (plan.ExecutionPlan, plan.ExecutionPlan) {
+				return plan.CompileRDSCreateReadReplica(p, h)
+			},
+			SessionPolicy: func(accountID string) identity.SessionPolicy {
+				return identity.BuildRDSCreateReadReplicaPolicy(p, accountID)
+			},
+		}, nil
+
 	default:
 		return nil, fmt.Errorf("no runner registered for action type %q", actionType)
 	}

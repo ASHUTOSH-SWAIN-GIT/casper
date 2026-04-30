@@ -63,9 +63,41 @@ func (c *Client) callRDS(ctx context.Context, call plan.APICall) (interpreter.Re
 		}
 		out, err := c.rds.DescribeDBInstances(ctx, &in)
 		if err != nil {
+			// Symmetric with the DescribeDBSnapshots 404 handling: a
+			// deleted instance returns DBInstanceNotFound, which the
+			// rollback's verify-deleted step needs to interpret as an
+			// empty DBInstances list rather than a hard error.
+			if isDBInstanceNotFound(err) {
+				return interpreter.Response{
+					Body:      map[string]any{"DBInstances": []any{}},
+					RequestID: "",
+				}, nil
+			}
 			return interpreter.Response{}, err
 		}
 		return wrap(out, out.ResultMetadata)
+	case "CreateDBInstanceReadReplica":
+		var in rds.CreateDBInstanceReadReplicaInput
+		if err := remarshal(call.Params, &in); err != nil {
+			return interpreter.Response{}, fmt.Errorf("decode params: %w", err)
+		}
+		out, err := c.rds.CreateDBInstanceReadReplica(ctx, &in)
+		if err != nil {
+			return interpreter.Response{}, err
+		}
+		return wrap(out, out.ResultMetadata)
+
+	case "DeleteDBInstance":
+		var in rds.DeleteDBInstanceInput
+		if err := remarshal(call.Params, &in); err != nil {
+			return interpreter.Response{}, fmt.Errorf("decode params: %w", err)
+		}
+		out, err := c.rds.DeleteDBInstance(ctx, &in)
+		if err != nil {
+			return interpreter.Response{}, err
+		}
+		return wrap(out, out.ResultMetadata)
+
 	case "RebootDBInstance":
 		var in rds.RebootDBInstanceInput
 		if err := remarshal(call.Params, &in); err != nil {
@@ -143,11 +175,17 @@ func isSnapshotNotFound(err error) bool {
 	if err == nil {
 		return false
 	}
-	msg := err.Error()
-	// aws-sdk-go-v2 surfaces this as "DBSnapshotNotFound: ..." at the top
-	// of the wrapped error chain. String matching is fragile but adequate
-	// for v1 — we can swap to typed errors.As once we add more handlers.
-	return contains(msg, "DBSnapshotNotFound")
+	return contains(err.Error(), "DBSnapshotNotFound")
+}
+
+// isDBInstanceNotFound reports whether the error is RDS's
+// DBInstanceNotFound — the symmetric "the instance is gone" signal
+// during rollback verify of a delete.
+func isDBInstanceNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	return contains(err.Error(), "DBInstanceNotFound")
 }
 
 func contains(s, sub string) bool {

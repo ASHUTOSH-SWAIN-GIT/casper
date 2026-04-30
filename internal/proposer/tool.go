@@ -366,6 +366,66 @@ func buildRDSDeleteSnapshotProposeTool(c *captured) tool.Tool {
 	)
 }
 
+// ──────────────────────────────────────────────────────────────────
+// rds_create_read_replica action
+// ──────────────────────────────────────────────────────────────────
+
+type rdsCreateReadReplicaProposeInput struct {
+	SourceDBInstanceIdentifier  string `json:"source_db_instance_identifier" jsonschema:"description=The primary RDS instance to replicate from."`
+	ReplicaDBInstanceIdentifier string `json:"replica_db_instance_identifier" jsonschema:"description=Identifier for the new replica. Use 'casper-<source>-<short-tag>' to qualify for auto-approval."`
+	Region                      string `json:"region" jsonschema:"description=AWS region the source instance lives in."`
+	ReplicaInstanceClass        string `json:"replica_instance_class" jsonschema:"description=Instance class for the replica (typically equal to or smaller than the source's class)."`
+	Reasoning                   string `json:"reasoning" jsonschema:"description=Short rationale. Note that a replica is a full second instance, billed per hour."`
+}
+
+func buildRDSCreateReadReplicaProposeTool(c *captured) tool.Tool {
+	return tool.Typed(
+		"propose_rds_create_read_replica",
+		"Emit exactly one structured RDS read-replica creation proposal. Call this exactly once with all fields populated.",
+		func(ctx context.Context, in rdsCreateReadReplicaProposeInput) (proposeOutput, error) {
+			if in.SourceDBInstanceIdentifier == "" {
+				return proposeOutput{}, errors.New("source_db_instance_identifier required")
+			}
+			if in.ReplicaDBInstanceIdentifier == "" {
+				return proposeOutput{}, errors.New("replica_db_instance_identifier required")
+			}
+			raw, err := json.Marshal(in)
+			if err != nil {
+				return proposeOutput{}, fmt.Errorf("marshal proposal: %w", err)
+			}
+			if err := action.ValidateRDSCreateReadReplica(raw); err != nil {
+				return proposeOutput{}, fmt.Errorf("schema validation: %w", err)
+			}
+			h, err := action.Hash(raw)
+			if err != nil {
+				return proposeOutput{}, fmt.Errorf("hash proposal: %w", err)
+			}
+			c.set(raw, h)
+			return proposeOutput{Hash: string(h)}, nil
+		},
+	)
+}
+
+const rdsCreateReadReplicaSystemPrompt = `You are Casper's RDS read-replica proposer.
+
+Your only job is to turn a natural-language intent and an infrastructure snapshot into exactly one structured proposal by calling the propose_rds_create_read_replica tool.
+
+Hard constraints:
+- You must call propose_rds_create_read_replica exactly ONCE.
+- "source_db_instance_identifier" must match the snapshot's instance identifier verbatim.
+- "replica_db_instance_identifier" must NOT equal the source — that would be a name collision.
+- "replica_instance_class" must start with "db." (it's an RDS instance class).
+
+How to choose replica_db_instance_identifier:
+- Use "casper-<source>-replica" or "casper-<source>-<short-tag>" to qualify for auto-approval.
+- Pick a tag that conveys purpose: e.g. "casper-orders-prod-analytics" or "casper-orders-prod-reports".
+
+How to choose replica_instance_class:
+- Default to the source instance's class (matches read capacity).
+- For analytics replicas, a smaller class can be reasonable to save cost.
+
+Be aware: replicas are full-priced second instances. Mention this in reasoning so the human reviewer can weigh the cost.`
+
 const rdsDeleteSnapshotSystemPrompt = `You are Casper's RDS snapshot-deletion proposer.
 
 This action is IRREVERSIBLE: once a snapshot is deleted, AWS does not retain it — the data is permanently gone. Casper's policy defaults to deny and never auto-allows. Even valid proposals always require human approval.

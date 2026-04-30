@@ -56,6 +56,9 @@ var rulesRDSStorageGrow []byte
 //go:embed rules_rds_delete_snapshot.rego
 var rulesRDSDeleteSnapshot []byte
 
+//go:embed rules_rds_create_read_replica.rego
+var rulesRDSCreateReadReplica []byte
+
 // Decision is the verdict triple. A future v2 may add "irreversible"
 // or "needs_multi_party_approval" — for v1 the three values below are
 // sufficient.
@@ -92,6 +95,7 @@ func NewEngine(ctx context.Context) (*Engine, error) {
 		"rds_modify_multi_az":         rulesRDSModifyMultiAZ,
 		"rds_storage_grow":            rulesRDSStorageGrow,
 		"rds_delete_snapshot":         rulesRDSDeleteSnapshot,
+		"rds_create_read_replica":     rulesRDSCreateReadReplica,
 	}
 
 	queries := make(map[string]rego.PreparedEvalQuery, len(modules))
@@ -172,4 +176,9 @@ func (e *Engine) EvaluateRDSStorageGrow(ctx context.Context, p action.RDSStorage
 // EvaluateRDSDeleteSnapshot runs the policy against a delete-snapshot proposal.
 func (e *Engine) EvaluateRDSDeleteSnapshot(ctx context.Context, p action.RDSDeleteSnapshotProposal) (Verdict, error) {
 	return e.evaluate(ctx, "rds_delete_snapshot", p)
+}
+
+// EvaluateRDSCreateReadReplica runs the policy against a read-replica proposal.
+func (e *Engine) EvaluateRDSCreateReadReplica(ctx context.Context, p action.RDSCreateReadReplicaProposal) (Verdict, error) {
+	return e.evaluate(ctx, "rds_create_read_replica", p)
 }

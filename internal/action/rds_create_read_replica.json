@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://casper.dev/schemas/rds_create_read_replica.schema.json",
+  "title": "RDSCreateReadReplicaProposal",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "source_db_instance_identifier",
+    "replica_db_instance_identifier",
+    "region",
+    "replica_instance_class",
+    "reasoning"
+  ],
+  "properties": {
+    "source_db_instance_identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 63,
+      "pattern": "^[a-zA-Z][a-zA-Z0-9-]*$"
+    },
+    "replica_db_instance_identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 63,
+      "pattern": "^[a-zA-Z][a-zA-Z0-9-]*$"
+    },
+    "region": {
+      "type": "string",
+      "pattern": "^[a-z]{2}-[a-z]+-[0-9]+$"
+    },
+    "replica_instance_class": {
+      "type": "string",
+      "pattern": "^db\\."
+    },
+    "reasoning": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

@@ -110,6 +110,14 @@ var Registry = map[string]Spec{
 		PolicyDefault: "deny",
 		PolicyQuery:   "data.casper.rds_delete_snapshot.result",
 	},
+	"rds_create_read_replica": {
+		Type:          "rds_create_read_replica",
+		Service:       "rds",
+		Description:   "Create a read replica off an existing primary RDS instance (additive — source is unchanged)",
+		Reversibility: "reversible", // delete the replica
+		PolicyDefault: "needs_approval",
+		PolicyQuery:   "data.casper.rds_create_read_replica.result",
+	},
 }
 
 // Lookup returns the Spec for an action type, or false if unregistered.
