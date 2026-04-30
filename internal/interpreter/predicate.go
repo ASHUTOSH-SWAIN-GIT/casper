@@ -126,6 +126,17 @@ func equal(a, b any) bool {
 	return reflect.DeepEqual(a, b)
 }
 
+// isEmpty checks the structural emptiness of a value.
+//
+// "Empty" means: nil, "", or a map/slice that contains only empty values
+// (recursively). This last clause matters because AWS responses round-tripped
+// through JSON come back as structs with every unset pointer field rendered
+// as a literal null inside a populated key set — e.g. a "no pending changes"
+// PendingModifiedValues object has ~20 keys, all set to nil. By len() that
+// looks non-empty; semantically it is empty. We treat it as empty.
+//
+// Numbers and booleans are NOT considered empty regardless of value (0 and
+// false are real values, not absence).
 func isEmpty(v any) bool {
 	if v == nil {
 		return true
@@ -134,9 +145,19 @@ func isEmpty(v any) bool {
 	case string:
 		return x == ""
 	case map[string]any:
-		return len(x) == 0
+		for _, val := range x {
+			if !isEmpty(val) {
+				return false
+			}
+		}
+		return true
 	case []any:
-		return len(x) == 0
+		for _, val := range x {
+			if !isEmpty(val) {
+				return false
+			}
+		}
+		return true
 	}
 	return false
 }

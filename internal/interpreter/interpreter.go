@@ -111,8 +111,12 @@ func (i *Interpreter) recordPlanEnd(ctx context.Context, p plan.ExecutionPlan, o
 	_, _ = i.Audit.Append(ctx, kind, p.ProposalHash, payload)
 }
 
-func (i *Interpreter) runStep(ctx context.Context, s plan.Step, captures map[string]Response) StepResult {
-	r := StepResult{StepID: s.ID, Kind: s.Kind, StartedAt: i.now()}
+func (i *Interpreter) runStep(ctx context.Context, s plan.Step, captures map[string]Response) (r StepResult) {
+	// Named return so the deferred FinishedAt assignment actually
+	// reaches the caller — without this, returns inside the switch
+	// take a copy of r before the defer fires, leaving FinishedAt
+	// at its zero value in the returned StepResult.
+	r = StepResult{StepID: s.ID, Kind: s.Kind, StartedAt: i.now()}
 	defer func() { r.FinishedAt = i.now() }()
 
 	switch s.Kind {

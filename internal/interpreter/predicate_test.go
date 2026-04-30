@@ -18,10 +18,26 @@ func TestEvalPredicate_Eq(t *testing.T) {
 
 func TestEvalPredicate_Empty(t *testing.T) {
 	body := map[string]any{
-		"empty_map":  map[string]any{},
-		"empty_list": []any{},
-		"empty_str":  "",
-		"full_map":   map[string]any{"a": 1},
+		"empty_map":   map[string]any{},
+		"empty_list":  []any{},
+		"empty_str":   "",
+		"full_map":    map[string]any{"a": 1},
+		"all_nil_map": map[string]any{"a": nil, "b": nil, "c": nil},
+		// Mirrors the shape AWS returns for PendingModifiedValues with
+		// no actual pending changes — populated keys, all nil values.
+		"aws_pending_empty": map[string]any{
+			"DBInstanceClass":  nil,
+			"AllocatedStorage": nil,
+			"MultiAZ":          nil,
+			"EngineVersion":    nil,
+		},
+		"aws_pending_real": map[string]any{
+			"DBInstanceClass":  "db.r6g.xlarge",
+			"AllocatedStorage": nil,
+		},
+		"nested_empty": map[string]any{
+			"outer": map[string]any{"inner": nil},
+		},
 	}
 	cases := []struct {
 		path string
@@ -31,6 +47,10 @@ func TestEvalPredicate_Empty(t *testing.T) {
 		{"empty_list", true},
 		{"empty_str", true},
 		{"full_map", false},
+		{"all_nil_map", true},        // map of all-nil values is empty
+		{"aws_pending_empty", true},  // the actual bug we hit on a real AWS response
+		{"aws_pending_real", false},  // one populated field → not empty
+		{"nested_empty", true},       // recurses
 	}
 	for _, c := range cases {
 		err := evalPredicate(body, plan.Predicate{Path: c.path, Operator: "empty"})

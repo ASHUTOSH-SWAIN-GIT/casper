@@ -85,12 +85,16 @@ func New(c Config) (*Proposer, error) {
 	if c.Budget == nil {
 		ttl := c.Timeout
 		if ttl == 0 {
-			ttl = 60 * time.Second
+			ttl = 45 * time.Second
 		}
+		// Tight default — a real proposer run is ~1.5K in + ~500 out
+		// for the tool call, plus a short wrap-up. $0.05 is ~5x the
+		// expected cost; if we trip it, something's wrong (runaway
+		// retries, a stuck stream) and we want to fail closed.
 		c.Budget = &starling.Budget{
-			MaxInputTokens:  20_000,
-			MaxOutputTokens: 4_000,
-			MaxUSD:          0.20,
+			MaxInputTokens:  10_000,
+			MaxOutputTokens: 2_000,
+			MaxUSD:          0.05,
 			MaxWallClock:    ttl,
 		}
 	}
@@ -108,7 +112,13 @@ func New(c Config) (*Proposer, error) {
 		Config: starling.Config{
 			Model:        c.Model,
 			SystemPrompt: systemPrompt,
-			MaxTurns:     1, // single shot, no retries inside the agent
+			// 2 turns: turn 1 is the tool_use call (which is what we want),
+			// turn 2 is the model's brief acknowledgment after seeing the
+			// tool result. The proposal is captured during turn 1, so even
+			// if turn 2 ran arbitrarily we'd already have what we need —
+			// but Starling's ReAct loop wants to render that final turn,
+			// so we let it happen and tightly bound the budget instead.
+			MaxTurns: 2,
 		},
 		Budget: c.Budget,
 	}
@@ -149,13 +159,17 @@ func (p *Proposer) Propose(ctx context.Context, req Request) (*Result, error) {
 		return nil, err
 	}
 
-	runRes, err := p.agent.Run(ctx, goal)
-	if err != nil {
-		return nil, fmt.Errorf("agent run: %w", err)
-	}
+	runRes, runErr := p.agent.Run(ctx, goal)
 
+	// The proposal is captured during the tool call (turn 1). If the
+	// agent errors *after* that — most commonly hitting max_turns on
+	// the wrap-up turn — we still have a valid proposal to return.
+	// Only treat the run error as fatal if no proposal was captured.
 	raw, hash := p.captured.get()
 	if len(raw) == 0 {
+		if runErr != nil {
+			return nil, fmt.Errorf("agent run: %w", runErr)
+		}
 		return nil, fmt.Errorf("agent did not call propose_action (terminal: %s, run_id: %s)",
 			runRes.TerminalKind, runRes.RunID)
 	}
