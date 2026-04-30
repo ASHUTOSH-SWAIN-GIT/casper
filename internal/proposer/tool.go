@@ -293,6 +293,61 @@ func buildRDSModifyMultiAZProposeTool(c *captured) tool.Tool {
 	)
 }
 
+// ──────────────────────────────────────────────────────────────────
+// rds_storage_grow action (IRREVERSIBLE)
+// ──────────────────────────────────────────────────────────────────
+
+type rdsStorageGrowProposeInput struct {
+	DBInstanceIdentifier      string `json:"db_instance_identifier" jsonschema:"description=The RDS instance to grow."`
+	Region                    string `json:"region" jsonschema:"description=AWS region the instance lives in (e.g. us-east-1)."`
+	CurrentAllocatedStorageGB int    `json:"current_allocated_storage_gb" jsonschema:"description=Current allocated storage in GB (must match the snapshot)."`
+	TargetAllocatedStorageGB  int    `json:"target_allocated_storage_gb" jsonschema:"description=Target allocated storage in GB. Must be greater than current. THIS IS IRREVERSIBLE — RDS cannot shrink storage."`
+	ApplyImmediately          bool   `json:"apply_immediately" jsonschema:"description=Must be true."`
+	Reasoning                 string `json:"reasoning" jsonschema:"description=Short rationale. The reasoning should acknowledge that this action is irreversible."`
+}
+
+func buildRDSStorageGrowProposeTool(c *captured) tool.Tool {
+	return tool.Typed(
+		"propose_rds_storage_grow",
+		"Emit exactly one structured RDS storage-grow proposal. This action is IRREVERSIBLE. Call this exactly once with all fields populated.",
+		func(ctx context.Context, in rdsStorageGrowProposeInput) (proposeOutput, error) {
+			if in.DBInstanceIdentifier == "" {
+				return proposeOutput{}, errors.New("db_instance_identifier required")
+			}
+			raw, err := json.Marshal(in)
+			if err != nil {
+				return proposeOutput{}, fmt.Errorf("marshal proposal: %w", err)
+			}
+			if err := action.ValidateRDSStorageGrow(raw); err != nil {
+				return proposeOutput{}, fmt.Errorf("schema validation: %w", err)
+			}
+			h, err := action.Hash(raw)
+			if err != nil {
+				return proposeOutput{}, fmt.Errorf("hash proposal: %w", err)
+			}
+			c.set(raw, h)
+			return proposeOutput{Hash: string(h)}, nil
+		},
+	)
+}
+
+const rdsStorageGrowSystemPrompt = `You are Casper's RDS storage-grow proposer.
+
+This action is IRREVERSIBLE: AWS does not support shrinking allocated storage on an existing RDS instance. Your proposal will be evaluated by a policy that defaults to deny — even valid proposals require explicit human approval.
+
+Hard constraints:
+- You must call propose_rds_storage_grow exactly ONCE.
+- "current_allocated_storage_gb" must equal the snapshot's current_allocated_storage_gb verbatim.
+- "target_allocated_storage_gb" must be GREATER than current (no shrink).
+- "apply_immediately" must be true.
+
+Guidance for choosing target:
+- Default to a modest, deliberate increase (e.g. +20% or +50GB, whichever is larger). The policy denies anything more than 10x current.
+- The policy auto-decreases to needs_approval (rather than deny) when the increase is ≤100GB AND ≤2x current. Stay within those bounds for the smoothest path.
+- Acknowledge the irreversibility in "reasoning". Example: "Disk usage at 95% on a 100GB volume; growing to 200GB to provide ~6 months of headroom. Storage growth is irreversible; recovery to a smaller size requires dump+restore."
+
+Be conservative — over-allocating is harder to fix than under-allocating because you can always grow again later but you cannot shrink.`
+
 const rdsModifyMultiAZSystemPrompt = `You are Casper's RDS Multi-AZ toggle proposer.
 
 Your only job is to turn a natural-language intent and an infrastructure snapshot into exactly one structured proposal by calling the propose_rds_modify_multi_az tool.

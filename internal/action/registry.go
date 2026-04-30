@@ -94,6 +94,14 @@ var Registry = map[string]Spec{
 		PolicyDefault: "needs_approval",
 		PolicyQuery:   "data.casper.rds_modify_multi_az.result",
 	},
+	"rds_storage_grow": {
+		Type:          "rds_storage_grow",
+		Service:       "rds",
+		Description:   "Increase an RDS instance's allocated storage (irreversible — cannot shrink)",
+		Reversibility: "irreversible",
+		PolicyDefault: "deny", // fail-closed default for irreversible actions
+		PolicyQuery:   "data.casper.rds_storage_grow.result",
+	},
 }
 
 // Lookup returns the Spec for an action type, or false if unregistered.
