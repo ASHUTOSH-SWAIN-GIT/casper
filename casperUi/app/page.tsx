@@ -17,11 +17,7 @@ import {
 
 export default function Home() {
   return (
-    <div className="relative min-h-screen overflow-hidden">
-      {/* Background layers */}
-      <div className="pointer-events-none absolute inset-0 grid-bg" />
-      <div className="pointer-events-none absolute inset-0 glow" />
-
+    <div className="relative min-h-screen">
       <Header />
 
       <main className="relative">
@@ -158,8 +154,7 @@ function Hero() {
 function HeroDiagram() {
   return (
     <div className="relative mx-auto mt-16 max-w-4xl">
-      <div className="absolute inset-x-12 -top-4 h-32 rounded-full bg-accent/20 blur-3xl" />
-      <div className="relative overflow-hidden rounded-2xl border border-border bg-card/60 backdrop-blur">
+      <div className="relative overflow-hidden rounded-2xl border border-border bg-card">
         <div className="flex items-center gap-2 border-b border-border bg-muted/30 px-4 py-2.5">
           <span className="h-2.5 w-2.5 rounded-full bg-red-400/40" />
           <span className="h-2.5 w-2.5 rounded-full bg-yellow-400/40" />
