@@ -144,6 +144,32 @@ func buildRunnable(raw []byte) (*runnable, error) {
 			},
 		}, nil
 
+	case "rds_reboot_instance":
+		var p action.RDSRebootInstanceProposal
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return nil, fmt.Errorf("decode proposal: %w", err)
+		}
+		return &runnable{
+			ActionType: "rds_reboot_instance",
+			Hash:       h,
+			Region:     p.Region,
+			ProposalAuditPayload: map[string]any{
+				"action_type":            "rds_reboot_instance",
+				"db_instance_identifier": p.DBInstanceIdentifier,
+				"region":                 p.Region,
+				"force_failover":         p.ForceFailover,
+			},
+			EvaluatePolicy: func(ctx context.Context, e *policy.Engine) (policy.Verdict, error) {
+				return e.EvaluateRDSRebootInstance(ctx, p)
+			},
+			Compile: func() (plan.ExecutionPlan, plan.ExecutionPlan) {
+				return plan.CompileRDSRebootInstance(p, h)
+			},
+			SessionPolicy: func(accountID string) identity.SessionPolicy {
+				return identity.BuildRDSRebootInstancePolicy(p, accountID)
+			},
+		}, nil
+
 	default:
 		return nil, fmt.Errorf("no runner registered for action type %q", actionType)
 	}

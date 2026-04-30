@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://casper.dev/schemas/rds_reboot_instance.schema.json",
+  "title": "RDSRebootInstanceProposal",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "db_instance_identifier",
+    "region",
+    "force_failover",
+    "reasoning"
+  ],
+  "properties": {
+    "db_instance_identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 63,
+      "pattern": "^[a-zA-Z][a-zA-Z0-9-]*$"
+    },
+    "region": {
+      "type": "string",
+      "pattern": "^[a-z]{2}-[a-z]+-[0-9]+$"
+    },
+    "force_failover": {
+      "type": "boolean"
+    },
+    "reasoning": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

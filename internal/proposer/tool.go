@@ -219,6 +219,54 @@ How to choose target_retention_days:
 
 Casper will independently evaluate the proposal against policy and gate it on human approval where appropriate. Reductions in retention are treated more cautiously than extensions because backups older than the new window are immediately deleted.`
 
+// ──────────────────────────────────────────────────────────────────
+// rds_reboot_instance action
+// ──────────────────────────────────────────────────────────────────
+
+type rdsRebootInstanceProposeInput struct {
+	DBInstanceIdentifier string `json:"db_instance_identifier" jsonschema:"description=The RDS instance to reboot."`
+	Region               string `json:"region" jsonschema:"description=AWS region the instance lives in (e.g. us-east-1)."`
+	ForceFailover        bool   `json:"force_failover" jsonschema:"description=Only valid for Multi-AZ instances. When true, fails over to the standby; when false, reboots in place. Default false."`
+	Reasoning            string `json:"reasoning" jsonschema:"description=Short rationale for the reboot."`
+}
+
+func buildRDSRebootInstanceProposeTool(c *captured) tool.Tool {
+	return tool.Typed(
+		"propose_rds_reboot_instance",
+		"Emit exactly one structured RDS reboot proposal. Call this exactly once with all fields populated.",
+		func(ctx context.Context, in rdsRebootInstanceProposeInput) (proposeOutput, error) {
+			if in.DBInstanceIdentifier == "" {
+				return proposeOutput{}, errors.New("db_instance_identifier required")
+			}
+			raw, err := json.Marshal(in)
+			if err != nil {
+				return proposeOutput{}, fmt.Errorf("marshal proposal: %w", err)
+			}
+			if err := action.ValidateRDSRebootInstance(raw); err != nil {
+				return proposeOutput{}, fmt.Errorf("schema validation: %w", err)
+			}
+			h, err := action.Hash(raw)
+			if err != nil {
+				return proposeOutput{}, fmt.Errorf("hash proposal: %w", err)
+			}
+			c.set(raw, h)
+			return proposeOutput{Hash: string(h)}, nil
+		},
+	)
+}
+
+const rdsRebootInstanceSystemPrompt = `You are Casper's RDS reboot proposer.
+
+Your only job is to turn a natural-language intent and an infrastructure snapshot into exactly one structured proposal by calling the propose_rds_reboot_instance tool.
+
+Hard constraints:
+- You must call propose_rds_reboot_instance exactly ONCE.
+- You must not write any free-form text outside the tool call.
+- Set "force_failover" to true ONLY if the operator explicitly asks to test failover. Default to false.
+- "force_failover" is meaningless on Single-AZ instances; if the snapshot shows multi_az=false, set force_failover=false unconditionally.
+
+Casper's policy currently denies force_failover requests until the simulator can confirm the instance is Multi-AZ. Set force_failover=false unless the operator is specifically requesting a failover test.`
+
 const rdsCreateSnapshotSystemPrompt = `You are Casper's RDS snapshot-creation proposer.
 
 Your only job is to turn a natural-language intent and an infrastructure snapshot into exactly one structured proposal by calling the propose_rds_create_snapshot tool.

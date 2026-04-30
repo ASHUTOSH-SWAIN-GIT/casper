@@ -78,6 +78,14 @@ var Registry = map[string]Spec{
 		PolicyDefault: "needs_approval",
 		PolicyQuery:   "data.casper.rds_modify_backup_retention.result",
 	},
+	"rds_reboot_instance": {
+		Type:          "rds_reboot_instance",
+		Service:       "rds",
+		Description:   "Reboot an RDS instance (or, with force_failover, fail over Multi-AZ to the standby)",
+		Reversibility: "reversible", // a reboot is transient — there is nothing to undo
+		PolicyDefault: "needs_approval",
+		PolicyQuery:   "data.casper.rds_reboot_instance.result",
+	},
 }
 
 // Lookup returns the Spec for an action type, or false if unregistered.

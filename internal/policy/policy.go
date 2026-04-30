@@ -44,6 +44,9 @@ var rulesRDSCreateSnapshot []byte
 //go:embed rules_rds_modify_backup_retention.rego
 var rulesRDSModifyBackupRetention []byte
 
+//go:embed rules_rds_reboot_instance.rego
+var rulesRDSRebootInstance []byte
+
 // Decision is the verdict triple. A future v2 may add "irreversible"
 // or "needs_multi_party_approval" — for v1 the three values below are
 // sufficient.
@@ -76,6 +79,7 @@ func NewEngine(ctx context.Context) (*Engine, error) {
 		"rds_resize":                  rulesRDSResize,
 		"rds_create_snapshot":         rulesRDSCreateSnapshot,
 		"rds_modify_backup_retention": rulesRDSModifyBackupRetention,
+		"rds_reboot_instance":         rulesRDSRebootInstance,
 	}
 
 	queries := make(map[string]rego.PreparedEvalQuery, len(modules))
@@ -136,4 +140,9 @@ func (e *Engine) EvaluateRDSCreateSnapshot(ctx context.Context, p action.RDSCrea
 // EvaluateRDSModifyBackupRetention runs the policy against a backup-retention change proposal.
 func (e *Engine) EvaluateRDSModifyBackupRetention(ctx context.Context, p action.RDSModifyBackupRetentionProposal) (Verdict, error) {
 	return e.evaluate(ctx, "rds_modify_backup_retention", p)
+}
+
+// EvaluateRDSRebootInstance runs the policy against a reboot proposal.
+func (e *Engine) EvaluateRDSRebootInstance(ctx context.Context, p action.RDSRebootInstanceProposal) (Verdict, error) {
+	return e.evaluate(ctx, "rds_reboot_instance", p)
 }
