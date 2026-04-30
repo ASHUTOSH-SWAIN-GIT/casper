@@ -19,10 +19,18 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/joho/godotenv"
+
 	"github.com/ASHUTOSH-SWAIN-GIT/casper/internal/server"
 )
 
 func main() {
+	// Load .env from the working directory if present. Existing env vars
+	// take precedence — godotenv.Load only sets vars that aren't already set.
+	if err := godotenv.Load(); err != nil && !os.IsNotExist(err) {
+		log.Printf("casperd: .env: %v", err)
+	}
+
 	addr := getenv("CASPERD_ADDR", "127.0.0.1:8787")
 
 	srv := server.New(server.Options{
