@@ -13,6 +13,8 @@ func TestRun_WritesAuditChainOnHappyPath(t *testing.T) {
 	fwd, _ := plan.CompileRDSResize(p, "hash-abc")
 
 	client := &fakeClient{queue: []fakeReply{
+		// pre-checks parallel group: order-independent, both replies are describe responses.
+		{body: describeResp("db.r6g.large", "available", map[string]any{})},
 		{body: describeResp("db.r6g.large", "available", map[string]any{})},
 		{body: map[string]any{}}, // modify
 		{body: describeResp("db.r6g.large", "modifying", map[string]any{"DBInstanceClass": "db.r6g.xlarge"})},
@@ -32,8 +34,8 @@ func TestRun_WritesAuditChainOnHappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	// 8 step_started + 8 step_completed + 1 plan_completed = 17.
-	if got, want := len(events), 17; got != want {
+	// 9 step_started + 9 step_completed + 1 plan_completed = 19.
+	if got, want := len(events), 19; got != want {
 		t.Errorf("events: got %d want %d", got, want)
 	}
 	if err := store.Verify(context.Background()); err != nil {
@@ -49,7 +51,9 @@ func TestRun_WritesPlanFailedOnStepFailure(t *testing.T) {
 	fwd, _ := plan.CompileRDSResize(p, "hash-xyz")
 
 	// describe-pre returns wrong class — preconditions fail, plan aborts.
+	// Both parallel replies use wrong class so the test is order-independent.
 	client := &fakeClient{queue: []fakeReply{
+		{body: describeResp("db.r6g.SOMETHING_ELSE", "available", map[string]any{})},
 		{body: describeResp("db.r6g.SOMETHING_ELSE", "available", map[string]any{})},
 	}}
 

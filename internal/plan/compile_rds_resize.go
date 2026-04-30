@@ -25,16 +25,42 @@ func rdsResizeForward(p action.RDSResizeProposal, h action.ProposalHash) Executi
 		"ApplyImmediately":     true,
 	}
 
+	metricsParams := map[string]any{
+		"Namespace":  "AWS/RDS",
+		"MetricName": p.SuccessCriteria.Metric,
+		"Dimensions": []map[string]any{
+			{"Name": "DBInstanceIdentifier", "Value": p.DBInstanceIdentifier},
+		},
+		"Period":     60,
+		"Statistics": []string{"Average"},
+		"Window":     "5m",
+	}
+
 	steps := []Step{
+		// describe-pre and metrics-pre are independent read-only calls — run them
+		// in parallel to shorten the pre-check phase.
 		{
-			ID:          "describe-pre",
-			Kind:        StepAWSAPICall,
-			Description: "Describe instance to capture pre-state",
-			OnFailure:   OnFailureAbort,
+			ID:            "describe-pre",
+			Kind:          StepAWSAPICall,
+			Description:   "Describe instance to capture pre-state",
+			OnFailure:     OnFailureAbort,
+			ParallelGroup: "pre-checks",
 			APICall: &APICall{
 				Service:   "rds",
 				Operation: "DescribeDBInstances",
 				Params:    describeParams,
+			},
+		},
+		{
+			ID:            "metrics-pre",
+			Kind:          StepAWSAPICall,
+			Description:   "Fetch pre-resize CPU baseline from CloudWatch",
+			OnFailure:     OnFailureAbort,
+			ParallelGroup: "pre-checks",
+			APICall: &APICall{
+				Service:   "cloudwatch",
+				Operation: "GetMetricStatistics",
+				Params:    metricsParams,
 			},
 		},
 		{

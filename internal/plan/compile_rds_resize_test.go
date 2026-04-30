@@ -29,12 +29,13 @@ const sampleHash action.ProposalHash = "deadbeef"
 func TestCompile_ForwardHasEightStepsInOrder(t *testing.T) {
 	fwd, _ := CompileRDSResize(sampleProposal(), sampleHash)
 
-	if got, want := len(fwd.Steps), 8; got != want {
+	if got, want := len(fwd.Steps), 9; got != want {
 		t.Fatalf("forward step count: got %d want %d", got, want)
 	}
 
 	wantKinds := []StepKind{
 		StepAWSAPICall, // describe-pre
+		StepAWSAPICall, // metrics-pre
 		StepVerify,     // preconditions
 		StepAWSAPICall, // modify
 		StepPoll,       // poll-modifying
@@ -54,9 +55,9 @@ func TestCompile_ForwardModifyUsesTargetClass(t *testing.T) {
 	p := sampleProposal()
 	fwd, _ := CompileRDSResize(p, sampleHash)
 
-	modify := fwd.Steps[2]
+	modify := fwd.Steps[3]
 	if modify.ID != "modify" {
-		t.Fatalf("expected step 2 to be modify, got %q", modify.ID)
+		t.Fatalf("expected step 3 to be modify, got %q", modify.ID)
 	}
 	if modify.APICall == nil {
 		t.Fatal("modify step has no APICall")

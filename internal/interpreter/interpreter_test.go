@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 // fakeClient returns scripted responses in call order. Each call matched
 // against any APICall — tests assert on the recorded Calls slice instead.
 type fakeClient struct {
+	mu    sync.Mutex
 	queue []fakeReply
 	calls []plan.APICall
 }
@@ -24,6 +26,8 @@ type fakeReply struct {
 }
 
 func (f *fakeClient) Call(_ context.Context, c plan.APICall) (Response, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.calls = append(f.calls, c)
 	if len(f.queue) == 0 {
 		return Response{}, fmt.Errorf("fakeClient: no scripted reply for call #%d (%s)", len(f.calls), c.Operation)
@@ -37,11 +41,14 @@ func (f *fakeClient) Call(_ context.Context, c plan.APICall) (Response, error) {
 // advances by 1s per Now() call — enough to exercise poll timeouts.
 func newTestInterpreter(client Client) *Interpreter {
 	t0 := time.Unix(1_700_000_000, 0)
+	var mu sync.Mutex
 	tick := time.Duration(0)
 	return &Interpreter{
 		Client: client,
 		Sleep:  func(time.Duration) {},
 		Now: func() time.Time {
+			mu.Lock()
+			defer mu.Unlock()
 			tick += time.Second
 			return t0.Add(tick)
 		},
@@ -82,19 +89,22 @@ func TestRun_HappyPathExecutesAllEightSteps(t *testing.T) {
 	fwd, _ := plan.CompileRDSResize(p, "hash-abc")
 
 	client := &fakeClient{queue: []fakeReply{
-		// 1. describe-pre
+		// pre-checks parallel group: describe-pre and metrics-pre run concurrently;
+		// both replies are describe responses so the test is order-independent.
+		// preconditions reads captures["describe-pre"], not captures["metrics-pre"].
 		{body: describeResp("db.r6g.large", "available", map[string]any{})},
-		// 2. preconditions: SourceStepID, no AWS call
-		// 3. modify
+		{body: describeResp("db.r6g.large", "available", map[string]any{})},
+		// preconditions: SourceStepID, no AWS call
+		// modify
 		{body: map[string]any{}},
-		// 4. poll-modifying
+		// poll-modifying
 		{body: describeResp("db.r6g.large", "modifying", map[string]any{"DBInstanceClass": "db.r6g.xlarge"})},
-		// 5. poll-available
+		// poll-available
 		{body: describeResp("db.r6g.xlarge", "available", map[string]any{})},
-		// 6. verify-class (its own describe)
+		// verify-class
 		{body: describeResp("db.r6g.xlarge", "available", map[string]any{})},
-		// 7. wait — no AWS call
-		// 8. verify-metric
+		// wait — no AWS call
+		// verify-metric
 		{body: map[string]any{
 			"Datapoints": map[string]any{"avg": 35.0},
 		}},
@@ -105,7 +115,7 @@ func TestRun_HappyPathExecutesAllEightSteps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if got, want := len(results), 8; got != want {
+	if got, want := len(results), 9; got != want {
 		t.Fatalf("results: got %d want %d", got, want)
 	}
 	for n, r := range results {
@@ -120,7 +130,9 @@ func TestRun_PreconditionsFailureAbortsBeforeModify(t *testing.T) {
 	fwd, _ := plan.CompileRDSResize(p, "hash-abc")
 
 	client := &fakeClient{queue: []fakeReply{
-		// describe-pre returns an unexpected current class — preconditions step fails.
+		// pre-checks parallel group: both replies use wrong class so preconditions fails
+		// regardless of which goroutine grabs which reply.
+		{body: describeResp("db.r6g.SOMETHING_ELSE", "available", map[string]any{})},
 		{body: describeResp("db.r6g.SOMETHING_ELSE", "available", map[string]any{})},
 	}}
 
@@ -129,11 +141,11 @@ func TestRun_PreconditionsFailureAbortsBeforeModify(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected run to fail at preconditions, got nil")
 	}
-	if got, want := len(results), 2; got != want {
-		t.Fatalf("results: got %d want %d (describe-pre + failed preconditions)", got, want)
+	if got, want := len(results), 3; got != want {
+		t.Fatalf("results: got %d want %d (describe-pre + metrics-pre + failed preconditions)", got, want)
 	}
-	if results[1].StepID != "preconditions" || results[1].Status != StepStatusFailed {
-		t.Errorf("expected preconditions to be failed, got %+v", results[1])
+	if results[2].StepID != "preconditions" || results[2].Status != StepStatusFailed {
+		t.Errorf("expected preconditions to be failed, got %+v", results[2])
 	}
 	// ModifyDBInstance must NOT have been called.
 	for _, c := range client.calls {

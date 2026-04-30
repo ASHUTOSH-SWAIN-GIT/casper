@@ -37,16 +37,35 @@ func rdsCreateSnapshotForward(p action.RDSCreateSnapshotProposal, h action.Propo
 		"DBSnapshotIdentifier": p.SnapshotIdentifier,
 	}
 
+	describeSnapshotsExistingParams := map[string]any{
+		"DBInstanceIdentifier": p.DBInstanceIdentifier,
+	}
+
 	steps := []Step{
+		// describe-pre and check-existing-snapshots are independent reads — run
+		// in parallel to shorten the pre-check phase.
 		{
-			ID:          "describe-pre",
-			Kind:        StepAWSAPICall,
-			Description: "Describe instance to capture pre-state",
-			OnFailure:   OnFailureAbort,
+			ID:            "describe-pre",
+			Kind:          StepAWSAPICall,
+			Description:   "Describe instance to capture pre-state",
+			OnFailure:     OnFailureAbort,
+			ParallelGroup: "pre-checks",
 			APICall: &APICall{
 				Service:   "rds",
 				Operation: "DescribeDBInstances",
 				Params:    describeDBParams,
+			},
+		},
+		{
+			ID:            "check-existing-snapshots",
+			Kind:          StepAWSAPICall,
+			Description:   "List existing snapshots for the instance to detect identifier collisions",
+			OnFailure:     OnFailureAbort,
+			ParallelGroup: "pre-checks",
+			APICall: &APICall{
+				Service:   "rds",
+				Operation: "DescribeDBSnapshots",
+				Params:    describeSnapshotsExistingParams,
 			},
 		},
 		{
