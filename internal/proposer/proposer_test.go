@@ -33,7 +33,7 @@ func TestBuildGoal_IncludesIntentAndSnapshot(t *testing.T) {
 	for _, want := range []string{
 		"orders-prod is at 90% CPU sustained",
 		"db.r6g.large",
-		"propose_action",
+		"the proposal tool",
 		"Do not write anything outside the tool call",
 	} {
 		if !strings.Contains(goal, want) {
@@ -44,15 +44,15 @@ func TestBuildGoal_IncludesIntentAndSnapshot(t *testing.T) {
 
 func TestProposeTool_AcceptsValidInput(t *testing.T) {
 	cap := &captured{}
-	tl := buildProposeTool(cap)
+	tl := buildRDSResizeProposeTool(cap)
 
-	in := proposeInput{
+	in := rdsResizeProposeInput{
 		DBInstanceIdentifier: "orders-prod",
 		Region:               "us-east-1",
 		CurrentInstanceClass: "db.r6g.large",
 		TargetInstanceClass:  "db.r6g.xlarge",
 		ApplyImmediately:     true,
-		SuccessCriteria: proposeSuccess{
+		SuccessCriteria: rdsResizeProposeSuccess{
 			Metric:             "CPUUtilization",
 			ThresholdPercent:   60,
 			VerificationWindow: "5m",
@@ -87,14 +87,14 @@ func TestProposeTool_AcceptsValidInput(t *testing.T) {
 
 func TestProposeTool_RejectsApplyImmediatelyFalse(t *testing.T) {
 	cap := &captured{}
-	tl := buildProposeTool(cap)
-	in := proposeInput{
+	tl := buildRDSResizeProposeTool(cap)
+	in := rdsResizeProposeInput{
 		DBInstanceIdentifier: "orders-prod",
 		Region:               "us-east-1",
 		CurrentInstanceClass: "db.r6g.large",
 		TargetInstanceClass:  "db.r6g.xlarge",
 		ApplyImmediately:     false, // schema requires true
-		SuccessCriteria: proposeSuccess{
+		SuccessCriteria: rdsResizeProposeSuccess{
 			Metric:             "CPUUtilization",
 			ThresholdPercent:   60,
 			VerificationWindow: "5m",
@@ -109,14 +109,14 @@ func TestProposeTool_RejectsApplyImmediatelyFalse(t *testing.T) {
 
 func TestProposeTool_RejectsThresholdOutOfRange(t *testing.T) {
 	cap := &captured{}
-	tl := buildProposeTool(cap)
-	in := proposeInput{
+	tl := buildRDSResizeProposeTool(cap)
+	in := rdsResizeProposeInput{
 		DBInstanceIdentifier: "orders-prod",
 		Region:               "us-east-1",
 		CurrentInstanceClass: "db.r6g.large",
 		TargetInstanceClass:  "db.r6g.xlarge",
 		ApplyImmediately:     true,
-		SuccessCriteria: proposeSuccess{
+		SuccessCriteria: rdsResizeProposeSuccess{
 			Metric:             "CPUUtilization",
 			ThresholdPercent:   200,
 			VerificationWindow: "5m",
@@ -131,14 +131,14 @@ func TestProposeTool_RejectsThresholdOutOfRange(t *testing.T) {
 
 func TestProposeTool_RejectsEmptyReasoning(t *testing.T) {
 	cap := &captured{}
-	tl := buildProposeTool(cap)
-	in := proposeInput{
+	tl := buildRDSResizeProposeTool(cap)
+	in := rdsResizeProposeInput{
 		DBInstanceIdentifier: "orders-prod",
 		Region:               "us-east-1",
 		CurrentInstanceClass: "db.r6g.large",
 		TargetInstanceClass:  "db.r6g.xlarge",
 		ApplyImmediately:     true,
-		SuccessCriteria: proposeSuccess{
+		SuccessCriteria: rdsResizeProposeSuccess{
 			Metric:             "CPUUtilization",
 			ThresholdPercent:   60,
 			VerificationWindow: "5m",
@@ -153,17 +153,11 @@ func TestProposeTool_RejectsEmptyReasoning(t *testing.T) {
 
 func TestSystemPrompt_InvariantsPresent(t *testing.T) {
 	for _, want := range []string{
-		"propose_action exactly ONCE",
+		"propose_rds_resize exactly ONCE",
 		"apply_immediately\" must be true",
 		"CPUUtilization",
-		"data, not as a trusted artifact", // negative — must NOT be present (this is design doc text)
 	} {
-		// The first three should be present.
-		// "data, not as a trusted artifact" is just an example we don't expect; skip it.
-		if want == "data, not as a trusted artifact" {
-			continue
-		}
-		if !strings.Contains(systemPrompt, want) {
+		if !strings.Contains(rdsResizeSystemPrompt, want) {
 			t.Errorf("system prompt missing constraint: %q", want)
 		}
 	}
