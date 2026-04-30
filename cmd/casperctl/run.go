@@ -58,14 +58,19 @@ func runProposal(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	return executeProposal(context.Background(), raw, runInMemoryAudit)
+}
+
+// executeProposal runs the trust-layer pipeline (validate → policy → compile
+// → mint creds → execute → audit) on a raw proposal byte slice. Shared by
+// `casperctl run <file>` and `casperctl do --intent ...`.
+func executeProposal(ctx context.Context, raw []byte, inMemoryAudit bool) error {
 	r, err := buildRunnable(raw)
 	if err != nil {
 		return err
 	}
 
-	ctx := context.Background()
-
-	store, closeStore, err := openAuditStore(ctx, runInMemoryAudit)
+	store, closeStore, err := openAuditStore(ctx, inMemoryAudit)
 	if err != nil {
 		return fmt.Errorf("open audit store: %w", err)
 	}
