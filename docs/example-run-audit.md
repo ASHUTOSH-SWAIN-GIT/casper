@@ -43,6 +43,197 @@
 
 ---
 
+## Forward plan
+
+Compiled from proposal `08961743f5392e8e…`. **8 steps** in the order below.
+
+### Step 1 — `describe-pre` (`aws_api_call`)
+
+> Describe instance to capture pre-state
+
+- On failure: `abort`
+- Status: **executed (done)**
+
+- Service: `rds`
+- Operation: `DescribeDBInstances`
+- Params: `{"DBInstanceIdentifier":"casper-testt"}`
+
+### Step 2 — `preconditions` (`verify`)
+
+> Re-check preconditions against captured pre-state
+
+- On failure: `abort`
+- Status: **executed (done)**
+
+**Verifies (against captured response from step `describe-pre`):**
+
+Assertions:
+
+- `DBInstances[0].DBInstanceIdentifier` eq `casper-testt`
+- `DBInstances[0].DBInstanceStatus` eq `available`
+- `DBInstances[0].PendingModifiedValues` empty
+- `DBInstances[0].DBInstanceClass` eq `db.t4g.micro`
+
+### Step 3 — `modify` (`aws_api_call`)
+
+> Resize instance to target class
+
+- On failure: `rollback`
+- Status: **executed (done)**
+
+- Service: `rds`
+- Operation: `ModifyDBInstance`
+- Params: `{"ApplyImmediately":true,"DBInstanceClass":"db.t4g.small","DBInstanceIdentifier":"casper-testt"}`
+
+### Step 4 — `poll-modifying` (`poll`)
+
+> Poll until status=modifying
+
+- On failure: `rollback`
+- Timeout: `2m`
+- Status: **executed (done)**
+
+**Polls:**
+
+- Service: `rds`
+- Operation: `DescribeDBInstances`
+- Params: `{"DBInstanceIdentifier":"casper-testt"}`
+
+- Until: path `DBInstances[0].DBInstanceStatus` eq `modifying`
+- Interval: `5s`
+
+### Step 5 — `poll-available` (`poll`)
+
+> Poll until status=available
+
+- On failure: `rollback`
+- Timeout: `30m`
+- Status: **executed (done)**
+
+**Polls:**
+
+- Service: `rds`
+- Operation: `DescribeDBInstances`
+- Params: `{"DBInstanceIdentifier":"casper-testt"}`
+
+- Until: path `DBInstances[0].DBInstanceStatus` eq `available`
+- Interval: `15s`
+
+### Step 6 — `verify-class` (`verify`)
+
+> Verify class equals target and no pending modifications
+
+- On failure: `rollback`
+- Status: **executed (done)**
+
+**Verifies (after fresh API call):**
+
+- Service: `rds`
+- Operation: `DescribeDBInstances`
+- Params: `{"DBInstanceIdentifier":"casper-testt"}`
+
+Assertions:
+
+- `DBInstances[0].DBInstanceClass` eq `db.t4g.small`
+- `DBInstances[0].PendingModifiedValues` empty
+
+### Step 7 — `wait-verification-window` (`wait`)
+
+> Wait verification window before sampling success metric
+
+- On failure: `rollback`
+- Status: **executed (done)**
+
+**Waits:** `5m`
+
+### Step 8 — `verify-metric` (`verify`)
+
+> Assert success metric meets threshold over verification window
+
+- On failure: `rollback`
+- Status: **executed (done)**
+
+**Verifies (after fresh API call):**
+
+- Service: `cloudwatch`
+- Operation: `GetMetricStatistics`
+- Params: `{"Dimensions":[{"Name":"DBInstanceIdentifier","Value":"casper-testt"}],"MetricName":"CPUUtilization","Namespace":"AWS/RDS","Period":60,"Statistics":["Average"],"Window":"5m"}`
+
+Assertions:
+
+- `Datapoints.avg` lte `80`
+
+---
+
+## Rollback plan
+
+Compiled at the same time as the forward plan. **4 steps**. **Not executed** in this run because the forward plan completed successfully (or because the failure mode was abort, not rollback).
+
+### Step 1 — `rollback-modify` (`aws_api_call`)
+
+> Resize instance back to original class
+
+- On failure: `abort`
+- Status: **not executed** _(rollback was not invoked)_
+
+- Service: `rds`
+- Operation: `ModifyDBInstance`
+- Params: `{"ApplyImmediately":true,"DBInstanceClass":"db.t4g.micro","DBInstanceIdentifier":"casper-testt"}`
+
+### Step 2 — `rollback-poll-modifying` (`poll`)
+
+> Poll until status=modifying
+
+- On failure: `abort`
+- Timeout: `2m`
+- Status: **not executed** _(rollback was not invoked)_
+
+**Polls:**
+
+- Service: `rds`
+- Operation: `DescribeDBInstances`
+- Params: `{"DBInstanceIdentifier":"casper-testt"}`
+
+- Until: path `DBInstances[0].DBInstanceStatus` eq `modifying`
+- Interval: `5s`
+
+### Step 3 — `rollback-poll-available` (`poll`)
+
+> Poll until status=available
+
+- On failure: `abort`
+- Timeout: `30m`
+- Status: **not executed** _(rollback was not invoked)_
+
+**Polls:**
+
+- Service: `rds`
+- Operation: `DescribeDBInstances`
+- Params: `{"DBInstanceIdentifier":"casper-testt"}`
+
+- Until: path `DBInstances[0].DBInstanceStatus` eq `available`
+- Interval: `15s`
+
+### Step 4 — `rollback-verify-class` (`verify`)
+
+> Verify class is back to original and no pending modifications
+
+- On failure: `abort`
+- Status: **not executed** _(rollback was not invoked)_
+
+**Verifies (after fresh API call):**
+
+- Service: `rds`
+- Operation: `DescribeDBInstances`
+- Params: `{"DBInstanceIdentifier":"casper-testt"}`
+
+Assertions:
+
+- `DBInstances[0].DBInstanceClass` eq `db.t4g.micro`
+- `DBInstances[0].PendingModifiedValues` empty
+
+---
+
 ## Step execution
 
 ### `describe-pre` (`aws_api_call`) — **done**
