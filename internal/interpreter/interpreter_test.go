@@ -233,3 +233,91 @@ func TestRun_AWSCallErrorAbortsStep(t *testing.T) {
 		t.Errorf("expected the failed call recorded with its error, got %+v", results[0].Calls)
 	}
 }
+
+func TestRun_ParallelGroup_BothSucceed(t *testing.T) {
+	// Two aws_api_call steps in the same parallel group — both should
+	// execute concurrently and both results should appear in results slice.
+	client := &fakeClient{
+		queue: []fakeReply{
+			{body: map[string]any{"ok": "a"}},
+			{body: map[string]any{"ok": "b"}},
+		},
+	}
+	interp := newTestInterpreter(client)
+
+	p := plan.ExecutionPlan{
+		Kind:         plan.PlanForward,
+		ActionType:   "test",
+		ProposalHash: "hash",
+		Steps: []plan.Step{
+			{
+				ID: "step-a", Kind: plan.StepAWSAPICall,
+				OnFailure: plan.OnFailureAbort, ParallelGroup: "pg1",
+				APICall: &plan.APICall{Service: "rds", Operation: "OpA"},
+			},
+			{
+				ID: "step-b", Kind: plan.StepAWSAPICall,
+				OnFailure: plan.OnFailureAbort, ParallelGroup: "pg1",
+				APICall: &plan.APICall{Service: "rds", Operation: "OpB"},
+			},
+		},
+	}
+
+	results, err := interp.Run(context.Background(), p)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("want 2 results, got %d", len(results))
+	}
+	for _, r := range results {
+		if r.Status != StepStatusDone {
+			t.Errorf("step %q: want done, got %s", r.StepID, r.Status)
+		}
+	}
+}
+
+func TestRun_ParallelGroup_OneFailsAbortsGroup(t *testing.T) {
+	client := &fakeClient{
+		queue: []fakeReply{
+			{body: map[string]any{"ok": "a"}},
+			{err: errors.New("boom")},
+		},
+	}
+	interp := newTestInterpreter(client)
+
+	p := plan.ExecutionPlan{
+		Kind:         plan.PlanForward,
+		ActionType:   "test",
+		ProposalHash: "hash",
+		Steps: []plan.Step{
+			{
+				ID: "step-a", Kind: plan.StepAWSAPICall,
+				OnFailure: plan.OnFailureAbort, ParallelGroup: "pg1",
+				APICall: &plan.APICall{Service: "rds", Operation: "OpA"},
+			},
+			{
+				ID: "step-b", Kind: plan.StepAWSAPICall,
+				OnFailure: plan.OnFailureAbort, ParallelGroup: "pg1",
+				APICall: &plan.APICall{Service: "rds", Operation: "OpB"},
+			},
+		},
+	}
+
+	results, err := interp.Run(context.Background(), p)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if len(results) != 2 {
+		t.Fatalf("want 2 results, got %d", len(results))
+	}
+	failed := 0
+	for _, r := range results {
+		if r.Status == StepStatusFailed {
+			failed++
+		}
+	}
+	if failed != 1 {
+		t.Errorf("want 1 failed step, got %d", failed)
+	}
+}

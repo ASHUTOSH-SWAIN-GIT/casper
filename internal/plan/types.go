@@ -79,12 +79,22 @@ type Wait struct {
 // Step is one unit of work in an ExecutionPlan. Exactly one of the
 // kind-specific fields (APICall, Poll, Verify, Wait) is populated,
 // determined by Kind.
+//
+// ParallelGroup: when non-empty, consecutive steps that share the same
+// ParallelGroup value are executed concurrently by the interpreter.
+// Steps in a group must not reference each other's captures via
+// SourceStepID — captures from prior sequential steps are available.
+// The group acts as a synchronisation barrier: all steps in it must
+// finish before the next step (or group) starts. On-failure semantics
+// are evaluated after all goroutines complete: if any step fails with
+// OnFailureRollback the whole plan rolls back; OnFailureAbort aborts.
 type Step struct {
-	ID          string    `json:"id"`
-	Kind        StepKind  `json:"kind"`
-	Description string    `json:"description"`
-	Timeout     string    `json:"timeout,omitempty"`
-	OnFailure   OnFailure `json:"on_failure"`
+	ID            string    `json:"id"`
+	Kind          StepKind  `json:"kind"`
+	Description   string    `json:"description"`
+	Timeout       string    `json:"timeout,omitempty"`
+	OnFailure     OnFailure `json:"on_failure"`
+	ParallelGroup string    `json:"parallel_group,omitempty"`
 
 	APICall *APICall `json:"api_call,omitempty"`
 	Poll    *Poll    `json:"poll,omitempty"`

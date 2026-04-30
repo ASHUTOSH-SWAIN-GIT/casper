@@ -29,26 +29,96 @@ type Interpreter struct {
 // in execution order. The error is non-nil iff the plan terminated
 // before completing all steps (a step failed with on_failure=abort or
 // on_failure=rollback). The caller decides whether to invoke a rollback.
+//
+// Steps that share a non-empty ParallelGroup are launched concurrently
+// via goroutines. The group acts as a barrier: all goroutines must
+// finish before the next step starts. Results within a group are
+// appended in the order the steps were declared.
 func (i *Interpreter) Run(ctx context.Context, p plan.ExecutionPlan) ([]StepResult, error) {
 	captures := map[string]Response{}
 	results := make([]StepResult, 0, len(p.Steps))
 
-	for _, step := range p.Steps {
-		i.recordStepStart(ctx, p, step)
-		r := i.runStep(ctx, step, captures)
-		results = append(results, r)
-		i.recordStepEnd(ctx, p, r)
-
-		if r.Status == StepStatusFailed {
-			i.recordPlanEnd(ctx, p, false, fmt.Sprintf("step %q failed: %s", step.ID, r.Error))
-			return results, fmt.Errorf("step %q failed: %s", step.ID, r.Error)
+	groups := groupSteps(p.Steps)
+	for _, g := range groups {
+		if len(g) == 1 {
+			// Sequential fast path — no goroutine overhead.
+			step := g[0]
+			i.recordStepStart(ctx, p, step)
+			r := i.runStep(ctx, step, captures)
+			results = append(results, r)
+			i.recordStepEnd(ctx, p, r)
+			if r.Status == StepStatusFailed {
+				i.recordPlanEnd(ctx, p, false, fmt.Sprintf("step %q failed: %s", step.ID, r.Error))
+				return results, fmt.Errorf("step %q failed: %s", step.ID, r.Error)
+			}
+			if len(r.Calls) > 0 {
+				captures[step.ID] = r.Calls[len(r.Calls)-1].Response
+			}
+			continue
 		}
-		if len(r.Calls) > 0 {
-			captures[step.ID] = r.Calls[len(r.Calls)-1].Response
+
+		// Parallel group — run all steps concurrently.
+		type indexed struct {
+			idx int
+			r   StepResult
+		}
+		ch := make(chan indexed, len(g))
+		for idx, step := range g {
+			idx, step := idx, step
+			i.recordStepStart(ctx, p, step)
+			go func() {
+				ch <- indexed{idx: idx, r: i.runStep(ctx, step, captures)}
+			}()
+		}
+
+		groupResults := make([]StepResult, len(g))
+		for range g {
+			got := <-ch
+			groupResults[got.idx] = got.r
+		}
+
+		// Record audit events and check for failures in declaration order.
+		var firstErr error
+		for k, r := range groupResults {
+			i.recordStepEnd(ctx, p, r)
+			results = append(results, r)
+			if r.Status == StepStatusFailed && firstErr == nil {
+				firstErr = fmt.Errorf("step %q failed: %s", g[k].ID, r.Error)
+			}
+			if len(r.Calls) > 0 {
+				captures[g[k].ID] = r.Calls[len(r.Calls)-1].Response
+			}
+		}
+		if firstErr != nil {
+			i.recordPlanEnd(ctx, p, false, firstErr.Error())
+			return results, firstErr
 		}
 	}
 	i.recordPlanEnd(ctx, p, true, "")
 	return results, nil
+}
+
+// groupSteps partitions steps into sequential/parallel groups.
+// Consecutive steps with the same non-empty ParallelGroup are batched
+// together; all other steps form singleton groups.
+func groupSteps(steps []plan.Step) [][]plan.Step {
+	var groups [][]plan.Step
+	i := 0
+	for i < len(steps) {
+		if steps[i].ParallelGroup == "" {
+			groups = append(groups, []plan.Step{steps[i]})
+			i++
+			continue
+		}
+		pg := steps[i].ParallelGroup
+		j := i
+		for j < len(steps) && steps[j].ParallelGroup == pg {
+			j++
+		}
+		groups = append(groups, steps[i:j])
+		i = j
+	}
+	return groups
 }
 
 func (i *Interpreter) recordStepStart(ctx context.Context, p plan.ExecutionPlan, s plan.Step) {
