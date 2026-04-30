@@ -86,6 +86,14 @@ var Registry = map[string]Spec{
 		PolicyDefault: "needs_approval",
 		PolicyQuery:   "data.casper.rds_reboot_instance.result",
 	},
+	"rds_modify_multi_az": {
+		Type:          "rds_modify_multi_az",
+		Service:       "rds",
+		Description:   "Toggle an RDS instance's Multi-AZ deployment (single-AZ ↔ multi-AZ)",
+		Reversibility: "reversible",
+		PolicyDefault: "needs_approval",
+		PolicyQuery:   "data.casper.rds_modify_multi_az.result",
+	},
 }
 
 // Lookup returns the Spec for an action type, or false if unregistered.

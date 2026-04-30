@@ -255,6 +255,62 @@ func buildRDSRebootInstanceProposeTool(c *captured) tool.Tool {
 	)
 }
 
+// ──────────────────────────────────────────────────────────────────
+// rds_modify_multi_az action
+// ──────────────────────────────────────────────────────────────────
+
+type rdsModifyMultiAZProposeInput struct {
+	DBInstanceIdentifier string `json:"db_instance_identifier" jsonschema:"description=The RDS instance to modify."`
+	Region               string `json:"region" jsonschema:"description=AWS region the instance lives in (e.g. us-east-1)."`
+	CurrentMultiAZ       bool   `json:"current_multi_az" jsonschema:"description=Current Multi-AZ deployment state (must match the snapshot)."`
+	TargetMultiAZ        bool   `json:"target_multi_az" jsonschema:"description=Target Multi-AZ deployment state."`
+	ApplyImmediately     bool   `json:"apply_immediately" jsonschema:"description=Must be true for v1."`
+	Reasoning            string `json:"reasoning" jsonschema:"description=Short rationale for the Multi-AZ change."`
+}
+
+func buildRDSModifyMultiAZProposeTool(c *captured) tool.Tool {
+	return tool.Typed(
+		"propose_rds_modify_multi_az",
+		"Emit exactly one structured RDS Multi-AZ toggle proposal. Call this exactly once with all fields populated.",
+		func(ctx context.Context, in rdsModifyMultiAZProposeInput) (proposeOutput, error) {
+			if in.DBInstanceIdentifier == "" {
+				return proposeOutput{}, errors.New("db_instance_identifier required")
+			}
+			raw, err := json.Marshal(in)
+			if err != nil {
+				return proposeOutput{}, fmt.Errorf("marshal proposal: %w", err)
+			}
+			if err := action.ValidateRDSModifyMultiAZ(raw); err != nil {
+				return proposeOutput{}, fmt.Errorf("schema validation: %w", err)
+			}
+			h, err := action.Hash(raw)
+			if err != nil {
+				return proposeOutput{}, fmt.Errorf("hash proposal: %w", err)
+			}
+			c.set(raw, h)
+			return proposeOutput{Hash: string(h)}, nil
+		},
+	)
+}
+
+const rdsModifyMultiAZSystemPrompt = `You are Casper's RDS Multi-AZ toggle proposer.
+
+Your only job is to turn a natural-language intent and an infrastructure snapshot into exactly one structured proposal by calling the propose_rds_modify_multi_az tool.
+
+Hard constraints:
+- You must call propose_rds_modify_multi_az exactly ONCE.
+- You must not write any free-form text outside the tool call.
+- "current_multi_az" must equal the snapshot's multi_az verbatim.
+- "apply_immediately" must be true.
+- Do not set target equal to current — that's a no-op and will be rejected.
+
+Guidance:
+- "enable HA / multi-AZ" / "make it highly available" → target_multi_az=true
+- "save money on this DB" / "downgrade to single-AZ" / "non-critical instance" → target_multi_az=false (will need approval)
+- Note: enabling Multi-AZ roughly doubles instance cost; mention this in reasoning.
+
+Casper's policy auto-allows enabling Multi-AZ (adds redundancy) but requires approval for disabling it (removes redundancy).`
+
 const rdsRebootInstanceSystemPrompt = `You are Casper's RDS reboot proposer.
 
 Your only job is to turn a natural-language intent and an infrastructure snapshot into exactly one structured proposal by calling the propose_rds_reboot_instance tool.

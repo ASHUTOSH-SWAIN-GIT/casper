@@ -170,6 +170,33 @@ func buildRunnable(raw []byte) (*runnable, error) {
 			},
 		}, nil
 
+	case "rds_modify_multi_az":
+		var p action.RDSModifyMultiAZProposal
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return nil, fmt.Errorf("decode proposal: %w", err)
+		}
+		return &runnable{
+			ActionType: "rds_modify_multi_az",
+			Hash:       h,
+			Region:     p.Region,
+			ProposalAuditPayload: map[string]any{
+				"action_type":            "rds_modify_multi_az",
+				"db_instance_identifier": p.DBInstanceIdentifier,
+				"region":                 p.Region,
+				"current_multi_az":       p.CurrentMultiAZ,
+				"target_multi_az":        p.TargetMultiAZ,
+			},
+			EvaluatePolicy: func(ctx context.Context, e *policy.Engine) (policy.Verdict, error) {
+				return e.EvaluateRDSModifyMultiAZ(ctx, p)
+			},
+			Compile: func() (plan.ExecutionPlan, plan.ExecutionPlan) {
+				return plan.CompileRDSModifyMultiAZ(p, h)
+			},
+			SessionPolicy: func(accountID string) identity.SessionPolicy {
+				return identity.BuildRDSModifyMultiAZPolicy(p, accountID)
+			},
+		}, nil
+
 	default:
 		return nil, fmt.Errorf("no runner registered for action type %q", actionType)
 	}

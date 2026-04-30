@@ -65,6 +65,8 @@ func detectActionType(raw []byte) (string, error) {
 		return "rds_modify_backup_retention", nil
 	case probe["force_failover"] != nil:
 		return "rds_reboot_instance", nil
+	case probe["target_multi_az"] != nil:
+		return "rds_modify_multi_az", nil
 	}
 	return "", fmt.Errorf("could not detect action type from proposal shape (no recognizable discriminator field)")
 }
@@ -81,6 +83,8 @@ func validateForActionType(raw []byte, actionType string) error {
 		return action.ValidateRDSModifyBackupRetention(raw)
 	case "rds_reboot_instance":
 		return action.ValidateRDSRebootInstance(raw)
+	case "rds_modify_multi_az":
+		return action.ValidateRDSModifyMultiAZ(raw)
 	default:
 		return fmt.Errorf("no validator registered for action type %q", actionType)
 	}

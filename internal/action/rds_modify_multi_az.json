@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://casper.dev/schemas/rds_modify_multi_az.schema.json",
+  "title": "RDSModifyMultiAZProposal",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "db_instance_identifier",
+    "region",
+    "current_multi_az",
+    "target_multi_az",
+    "apply_immediately",
+    "reasoning"
+  ],
+  "properties": {
+    "db_instance_identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 63,
+      "pattern": "^[a-zA-Z][a-zA-Z0-9-]*$"
+    },
+    "region": {
+      "type": "string",
+      "pattern": "^[a-z]{2}-[a-z]+-[0-9]+$"
+    },
+    "current_multi_az": {
+      "type": "boolean"
+    },
+    "target_multi_az": {
+      "type": "boolean"
+    },
+    "apply_immediately": {
+      "type": "boolean",
+      "const": true
+    },
+    "reasoning": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

@@ -94,6 +94,16 @@ func NewRDSRebootInstance(c Config) (*Proposer, error) {
 	return &Proposer{agent: a, captured: cap, actionType: "rds_reboot_instance"}, nil
 }
 
+// NewRDSModifyMultiAZ constructs an rds_modify_multi_az proposer.
+func NewRDSModifyMultiAZ(c Config) (*Proposer, error) {
+	cap := &captured{}
+	a, err := buildAgent(c, rdsModifyMultiAZSystemPrompt, []tool.Tool{buildRDSModifyMultiAZProposeTool(cap)})
+	if err != nil {
+		return nil, err
+	}
+	return &Proposer{agent: a, captured: cap, actionType: "rds_modify_multi_az"}, nil
+}
+
 // NewForAction is the generic dispatcher used by the CLI's NL mode.
 // It looks up the action type in the registry and returns the
 // matching Proposer.
@@ -110,6 +120,8 @@ func NewForAction(actionType string, c Config) (*Proposer, error) {
 		return NewRDSModifyBackupRetention(c)
 	case "rds_reboot_instance":
 		return NewRDSRebootInstance(c)
+	case "rds_modify_multi_az":
+		return NewRDSModifyMultiAZ(c)
 	default:
 		return nil, fmt.Errorf("no proposer wired for action type %q (registered but not yet implemented)", actionType)
 	}

@@ -47,6 +47,9 @@ var rulesRDSModifyBackupRetention []byte
 //go:embed rules_rds_reboot_instance.rego
 var rulesRDSRebootInstance []byte
 
+//go:embed rules_rds_modify_multi_az.rego
+var rulesRDSModifyMultiAZ []byte
+
 // Decision is the verdict triple. A future v2 may add "irreversible"
 // or "needs_multi_party_approval" — for v1 the three values below are
 // sufficient.
@@ -80,6 +83,7 @@ func NewEngine(ctx context.Context) (*Engine, error) {
 		"rds_create_snapshot":         rulesRDSCreateSnapshot,
 		"rds_modify_backup_retention": rulesRDSModifyBackupRetention,
 		"rds_reboot_instance":         rulesRDSRebootInstance,
+		"rds_modify_multi_az":         rulesRDSModifyMultiAZ,
 	}
 
 	queries := make(map[string]rego.PreparedEvalQuery, len(modules))
@@ -145,4 +149,9 @@ func (e *Engine) EvaluateRDSModifyBackupRetention(ctx context.Context, p action.
 // EvaluateRDSRebootInstance runs the policy against a reboot proposal.
 func (e *Engine) EvaluateRDSRebootInstance(ctx context.Context, p action.RDSRebootInstanceProposal) (Verdict, error) {
 	return e.evaluate(ctx, "rds_reboot_instance", p)
+}
+
+// EvaluateRDSModifyMultiAZ runs the policy against a Multi-AZ toggle proposal.
+func (e *Engine) EvaluateRDSModifyMultiAZ(ctx context.Context, p action.RDSModifyMultiAZProposal) (Verdict, error) {
+	return e.evaluate(ctx, "rds_modify_multi_az", p)
 }
