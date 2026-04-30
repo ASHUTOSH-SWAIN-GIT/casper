@@ -21,14 +21,22 @@ package proposer
 // about an RDS resize. Adding fields is a deliberate change; the
 // proposer's prompt should be updated alongside.
 type Snapshot struct {
-	DBInstanceIdentifier string  `json:"db_instance_identifier"`
-	Region               string  `json:"region"`
-	CurrentInstanceClass string  `json:"current_instance_class"`
-	Engine               string  `json:"engine"`
-	EngineVersion        string  `json:"engine_version,omitempty"`
-	Status               string  `json:"status"`
-	MultiAZ              bool    `json:"multi_az"`
-	RecentCPUUtilization float64 `json:"recent_cpu_utilization,omitempty"`
+	// Instance fields (rds_instance resource).
+	DBInstanceIdentifier  string  `json:"db_instance_identifier,omitempty"`
+	Region                string  `json:"region"`
+	CurrentInstanceClass  string  `json:"current_instance_class,omitempty"`
+	Engine                string  `json:"engine,omitempty"`
+	EngineVersion         string  `json:"engine_version,omitempty"`
+	Status                string  `json:"status,omitempty"`
+	MultiAZ               bool    `json:"multi_az,omitempty"`
+	AllocatedStorageGB    int32   `json:"allocated_storage_gb,omitempty"`
+	BackupRetentionDays   int32   `json:"backup_retention_days,omitempty"`
+	RecentCPUUtilization  float64 `json:"recent_cpu_utilization,omitempty"`
+
+	// Snapshot fields (rds_snapshot resource).
+	SnapshotIdentifier         string `json:"snapshot_identifier,omitempty"`
+	SourceDBInstanceIdentifier string `json:"source_db_instance_identifier,omitempty"`
+	SnapshotStatus             string `json:"snapshot_status,omitempty"`
 }
 
 // Request is the single-file input to `casperctl propose`. Intent is

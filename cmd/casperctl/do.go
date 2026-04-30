@@ -9,10 +9,14 @@ import (
 	"os"
 	"strings"
 
+	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/jerkeyray/starling/eventlog"
 	"github.com/spf13/cobra"
 
+	"github.com/ASHUTOSH-SWAIN-GIT/casper/internal/action"
+	"github.com/ASHUTOSH-SWAIN-GIT/casper/internal/awsx"
 	"github.com/ASHUTOSH-SWAIN-GIT/casper/internal/proposer"
+	"github.com/ASHUTOSH-SWAIN-GIT/casper/internal/snapshot"
 )
 
 var (
@@ -150,7 +154,7 @@ func generateProposal(ctx context.Context, cfg llmCfg, starLog eventlog.EventLog
 		return nil, fmt.Errorf("could not determine region — pass --region explicitly")
 	}
 
-	snapshot := proposer.Snapshot{
+	snap := proposer.Snapshot{
 		DBInstanceIdentifier: instance,
 		Region:               region,
 		CurrentInstanceClass: proposeCurrent,
@@ -158,8 +162,33 @@ func generateProposal(ctx context.Context, cfg llmCfg, starLog eventlog.EventLog
 		EngineVersion:        proposeEngineVer,
 		Status:               "available",
 		MultiAZ:              proposeMultiAZ,
+		BackupRetentionDays:  int32(proposeRetention),
 	}
-	req := proposer.Request{Intent: proposeIntent, Snapshot: snapshot}
+
+	// Auto-fetch live state from AWS so the proposer reasons against
+	// real values instead of operator-supplied flag fictions. The
+	// fetcher is keyed by the action's Resource type — set in
+	// internal/action/registry.go. If the AWS call fails (no creds,
+	// bad region, instance not found), we keep the flag-built
+	// snapshot so the proposer still has *something* to work with.
+	if spec, ok := action.Lookup(routing.ActionType); ok && spec.Resource != "" && instance != "" {
+		awsCfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region))
+		if err == nil {
+			fetched, fetchErr := snapshot.Fetch(ctx, awsx.New(awsCfg), spec.Resource, instance, region)
+			if fetchErr != nil {
+				fmt.Fprintf(os.Stderr, "snapshot: fetch %s/%s failed (%v) — falling back to flags\n",
+					spec.Resource, instance, fetchErr)
+			} else {
+				fmt.Fprintf(os.Stderr, "snapshot: fetched live state for %s/%s\n",
+					spec.Resource, instance)
+				snap = fetched
+			}
+		} else {
+			fmt.Fprintf(os.Stderr, "snapshot: aws config load failed (%v) — falling back to flags\n", err)
+		}
+	}
+
+	req := proposer.Request{Intent: proposeIntent, Snapshot: snap}
 
 	prop, err := proposer.NewForAction(routing.ActionType, proposer.Config{
 		Backend: cfg.Backend,

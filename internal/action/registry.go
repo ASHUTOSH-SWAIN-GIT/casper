@@ -48,6 +48,13 @@ type Spec struct {
 	// PolicyQuery is the Rego data path to read the verdict from.
 	// E.g. "data.casper.rds_resize.result".
 	PolicyQuery string
+
+	// Resource identifies the AWS resource type the action operates on.
+	// The snapshot fetcher dispatches on this — e.g. "rds_instance"
+	// fetchers DescribeDBInstances, "rds_snapshot" fetchers
+	// DescribeDBSnapshots. Multiple action types share a resource type
+	// (resize, modify_multi_az, storage_grow, etc. are all rds_instance).
+	Resource string
 }
 
 // Registry holds every action Casper currently supports. The map is
@@ -61,6 +68,7 @@ var Registry = map[string]Spec{
 		Reversibility: "reversible",
 		PolicyDefault: "needs_approval",
 		PolicyQuery:   "data.casper.rds_resize.result",
+		Resource:      "rds_instance",
 	},
 	"rds_create_snapshot": {
 		Type:          "rds_create_snapshot",
@@ -69,6 +77,7 @@ var Registry = map[string]Spec{
 		Reversibility: "reversible", // rollback deletes the just-created snapshot
 		PolicyDefault: "needs_approval",
 		PolicyQuery:   "data.casper.rds_create_snapshot.result",
+		Resource:      "rds_instance",
 	},
 	"rds_modify_backup_retention": {
 		Type:          "rds_modify_backup_retention",
@@ -77,6 +86,7 @@ var Registry = map[string]Spec{
 		Reversibility: "reversible",
 		PolicyDefault: "needs_approval",
 		PolicyQuery:   "data.casper.rds_modify_backup_retention.result",
+		Resource:      "rds_instance",
 	},
 	"rds_reboot_instance": {
 		Type:          "rds_reboot_instance",
@@ -85,6 +95,7 @@ var Registry = map[string]Spec{
 		Reversibility: "reversible", // a reboot is transient — there is nothing to undo
 		PolicyDefault: "needs_approval",
 		PolicyQuery:   "data.casper.rds_reboot_instance.result",
+		Resource:      "rds_instance",
 	},
 	"rds_modify_multi_az": {
 		Type:          "rds_modify_multi_az",
@@ -93,6 +104,7 @@ var Registry = map[string]Spec{
 		Reversibility: "reversible",
 		PolicyDefault: "needs_approval",
 		PolicyQuery:   "data.casper.rds_modify_multi_az.result",
+		Resource:      "rds_instance",
 	},
 	"rds_storage_grow": {
 		Type:          "rds_storage_grow",
@@ -101,6 +113,7 @@ var Registry = map[string]Spec{
 		Reversibility: "irreversible",
 		PolicyDefault: "deny", // fail-closed default for irreversible actions
 		PolicyQuery:   "data.casper.rds_storage_grow.result",
+		Resource:      "rds_instance",
 	},
 	"rds_delete_snapshot": {
 		Type:          "rds_delete_snapshot",
@@ -109,6 +122,7 @@ var Registry = map[string]Spec{
 		Reversibility: "irreversible",
 		PolicyDefault: "deny",
 		PolicyQuery:   "data.casper.rds_delete_snapshot.result",
+		Resource:      "rds_snapshot",
 	},
 	"rds_create_read_replica": {
 		Type:          "rds_create_read_replica",
@@ -117,6 +131,7 @@ var Registry = map[string]Spec{
 		Reversibility: "reversible", // delete the replica
 		PolicyDefault: "needs_approval",
 		PolicyQuery:   "data.casper.rds_create_read_replica.result",
+		Resource:      "rds_instance",
 	},
 	"rds_modify_engine_version": {
 		Type:          "rds_modify_engine_version",
@@ -125,6 +140,7 @@ var Registry = map[string]Spec{
 		Reversibility: "irreversible",
 		PolicyDefault: "deny",
 		PolicyQuery:   "data.casper.rds_modify_engine_version.result",
+		Resource:      "rds_instance",
 	},
 	"rds_restore_from_snapshot": {
 		Type:          "rds_restore_from_snapshot",
@@ -133,6 +149,7 @@ var Registry = map[string]Spec{
 		Reversibility: "reversible", // delete the new instance
 		PolicyDefault: "needs_approval",
 		PolicyQuery:   "data.casper.rds_restore_from_snapshot.result",
+		Resource:      "rds_snapshot",
 	},
 }
 
