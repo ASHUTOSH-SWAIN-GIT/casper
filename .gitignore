@@ -40,3 +40,6 @@ casper_proposer.db
 # Next.js build output (in case scratch UI lands here again)
 .next/
 node_modules/
+
+# graphify knowledge graph output
+graphify-out/
