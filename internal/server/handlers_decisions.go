@@ -148,7 +148,9 @@ func (s *Server) executeRun(runID string, rb *runner.Runnable) {
 		"decision":    string(verdict.Decision),
 		"reason":      verdict.Reason,
 	})
-	if verdict.Decision != policy.DecisionAllow {
+	// needs_approval is satisfied by the human approval that triggered this
+	// run — only a hard deny blocks execution at this stage.
+	if verdict.Decision == policy.DecisionDeny {
 		s.failRun(runID, "policy_blocked", errors.New("policy decision: "+string(verdict.Decision)+" — "+verdict.Reason))
 		return
 	}
