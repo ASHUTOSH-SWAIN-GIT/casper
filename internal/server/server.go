@@ -47,6 +47,10 @@ func (s *Server) Handler() http.Handler {
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /healthz", s.handleHealth)
+
+	// Action catalog (read-only, derived from the action registry).
+	s.mux.HandleFunc("GET /v1/actions", s.handleListActions)
+	s.mux.HandleFunc("GET /v1/actions/{type}", s.handleGetAction)
 }
 
 // withMiddleware wraps the mux with cross-cutting concerns:
