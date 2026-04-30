@@ -9,10 +9,24 @@ import (
 
 	starling "github.com/jerkeyray/starling"
 	"github.com/jerkeyray/starling/eventlog"
+	provider_iface "github.com/jerkeyray/starling/provider"
 	"github.com/jerkeyray/starling/provider/anthropic"
+	"github.com/jerkeyray/starling/provider/bedrock"
 	"github.com/jerkeyray/starling/tool"
 
 	"github.com/ASHUTOSH-SWAIN-GIT/casper/internal/action"
+)
+
+// Backend selects which LLM service the agent talks to. Anthropic API
+// is the default — direct calls to api.anthropic.com authenticated
+// with ANTHROPIC_API_KEY. Bedrock routes through AWS Bedrock and
+// authenticates with the AWS SDK credential chain (AWS_PROFILE /
+// IAM role / etc.).
+type Backend int
+
+const (
+	BackendAnthropic Backend = iota
+	BackendBedrock
 )
 
 // DefaultModel is the Anthropic model used by per-action proposers
@@ -20,6 +34,12 @@ import (
 // use: it follows schemas reliably and is meaningfully cheaper than
 // Opus for this workload. The smaller Haiku model is used for the
 // upstream NL router (see router.go).
+//
+// Bedrock model IDs are version-pinned and region-prefixed (e.g.
+// "us.anthropic.claude-sonnet-4-5-20250929-v1:0"). Casper does NOT
+// supply a default Bedrock ID — different users have access to
+// different inference profiles. Pass Model explicitly when
+// Backend=BackendBedrock, or set CASPER_BEDROCK_PROPOSER_MODEL.
 const DefaultModel = "claude-sonnet-4-6"
 
 // Proposer wraps a Starling agent for a single action type. New<Action>
@@ -33,11 +53,25 @@ type Proposer struct {
 
 // Config is shared across all per-action proposer constructors.
 type Config struct {
-	APIKey  string             // ANTHROPIC_API_KEY
-	Model   string             // optional, defaults to DefaultModel
-	Log     eventlog.EventLog  // required — Starling's run log
-	Budget  *starling.Budget   // optional, sane defaults applied if nil
-	Timeout time.Duration      // optional, applied as MaxWallClock when Budget is nil
+	// Backend picks the LLM service. Defaults to BackendAnthropic.
+	Backend Backend
+
+	// APIKey is required when Backend=BackendAnthropic.
+	APIKey string
+
+	// Region is used when Backend=BackendBedrock. If empty, the
+	// Bedrock provider falls back to AWS_REGION / AWS_DEFAULT_REGION
+	// from the AWS SDK default chain.
+	Region string
+
+	// Model is the model identifier. Required when Backend=BackendBedrock
+	// (Bedrock IDs are version-pinned and account-specific). Optional
+	// for Anthropic — defaults to DefaultModel.
+	Model string
+
+	Log     eventlog.EventLog // required — Starling's run log
+	Budget  *starling.Budget  // optional, sane defaults applied if nil
+	Timeout time.Duration     // optional, applied as MaxWallClock when Budget is nil
 }
 
 // Result is the per-call return shape — same across all action types.
@@ -191,16 +225,15 @@ func NewForAction(actionType string, c Config) (*Proposer, error) {
 // New<Action> constructor calls into here with its own system prompt
 // and tool — the budget, MaxTurns, and provider plumbing are shared.
 func buildAgent(c Config, systemPrompt string, tools []tool.Tool) (*starling.Agent, error) {
-	if c.APIKey == "" {
-		return nil, errors.New("APIKey is required (ANTHROPIC_API_KEY)")
-	}
 	if c.Log == nil {
 		return nil, errors.New("Log is required")
 	}
-	model := c.Model
-	if model == "" {
-		model = DefaultModel
+
+	prov, model, err := buildProvider(c)
+	if err != nil {
+		return nil, err
 	}
+
 	budget := c.Budget
 	if budget == nil {
 		ttl := c.Timeout
@@ -215,11 +248,6 @@ func buildAgent(c Config, systemPrompt string, tools []tool.Tool) (*starling.Age
 		}
 	}
 
-	prov, err := anthropic.New(anthropic.WithAPIKey(c.APIKey))
-	if err != nil {
-		return nil, fmt.Errorf("anthropic provider: %w", err)
-	}
-
 	return &starling.Agent{
 		Provider: prov,
 		Tools:    tools,
@@ -231,6 +259,42 @@ func buildAgent(c Config, systemPrompt string, tools []tool.Tool) (*starling.Age
 		},
 		Budget: budget,
 	}, nil
+}
+
+// buildProvider constructs the Starling provider for the configured
+// backend and returns the resolved model ID. Centralized so both the
+// per-action proposers and the NL router (router.go) share the same
+// switch.
+func buildProvider(c Config) (provider_iface.Provider, string, error) {
+	switch c.Backend {
+	case BackendBedrock:
+		if c.Model == "" {
+			return nil, "", errors.New("Model is required when Backend=BackendBedrock (no defaults — Bedrock IDs are version-pinned and account-specific; set CASPER_BEDROCK_PROPOSER_MODEL or pass explicitly)")
+		}
+		opts := []bedrock.Option{}
+		if c.Region != "" {
+			opts = append(opts, bedrock.WithRegion(c.Region))
+		}
+		prov, err := bedrock.New(opts...)
+		if err != nil {
+			return nil, "", fmt.Errorf("bedrock provider: %w", err)
+		}
+		return prov, c.Model, nil
+
+	default: // BackendAnthropic
+		if c.APIKey == "" {
+			return nil, "", errors.New("APIKey is required for Backend=BackendAnthropic (ANTHROPIC_API_KEY)")
+		}
+		model := c.Model
+		if model == "" {
+			model = DefaultModel
+		}
+		prov, err := anthropic.New(anthropic.WithAPIKey(c.APIKey))
+		if err != nil {
+			return nil, "", fmt.Errorf("anthropic provider: %w", err)
+		}
+		return prov, model, nil
+	}
 }
 
 // Propose runs the agent. The captured proposal is returned even when

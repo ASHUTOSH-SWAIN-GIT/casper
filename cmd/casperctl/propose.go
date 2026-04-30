@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/jerkeyray/starling/eventlog"
 	"github.com/spf13/cobra"
@@ -46,7 +47,20 @@ var proposeCmd = &cobra.Command{
     classifier, then runs the matching per-action proposer with the
     snapshot fields you provide as flags.
 
-  Required ENV: ANTHROPIC_API_KEY.
+  Backends:
+    Default — Anthropic API direct.
+      Required: ANTHROPIC_API_KEY.
+
+    AWS Bedrock — set CASPER_LLM_BACKEND=bedrock.
+      Required: AWS credentials in the standard SDK chain (AWS_PROFILE
+      / AWS_ACCESS_KEY_ID etc.), AWS_REGION, and explicit Bedrock
+      model IDs via CASPER_BEDROCK_PROPOSER_MODEL and
+      CASPER_BEDROCK_ROUTER_MODEL (Bedrock IDs are version-pinned and
+      account-specific; e.g. "us.anthropic.claude-sonnet-4-5-20250929-v1:0").
+
+  Optional model overrides (Anthropic backend):
+    CASPER_PROPOSER_MODEL  — default: claude-sonnet-4-6
+    CASPER_ROUTER_MODEL    — default: claude-haiku-4-5
 
   The Starling event log lives at $CASPER_PROPOSER_LOG (default
   ./casper_proposer.db) for replay and inspection.`,
@@ -75,9 +89,9 @@ func init() {
 }
 
 func runPropose(cmd *cobra.Command, args []string) error {
-	apiKey := os.Getenv("ANTHROPIC_API_KEY")
-	if apiKey == "" {
-		return fmt.Errorf("ANTHROPIC_API_KEY is required")
+	cfg, err := llmConfigFromEnv()
+	if err != nil {
+		return err
 	}
 	logPath := os.Getenv("CASPER_PROPOSER_LOG")
 	if logPath == "" {
@@ -93,17 +107,69 @@ func runPropose(cmd *cobra.Command, args []string) error {
 
 	// NL mode if --intent is set; otherwise file mode.
 	if proposeIntent != "" {
-		return runProposeNL(ctx, apiKey, starLog)
+		return runProposeNL(ctx, cfg, starLog)
 	}
 	if len(args) != 1 {
 		return fmt.Errorf("file mode requires exactly one positional argument: <request.json>\n  (or use --intent for NL mode)")
 	}
-	return runProposeFile(ctx, apiKey, starLog, args[0])
+	return runProposeFile(ctx, cfg, starLog, args[0])
+}
+
+// llmCfg bundles the env-derived backend, credentials, region, and
+// per-role model overrides for the proposer + router.
+type llmCfg struct {
+	Backend       proposer.Backend
+	APIKey        string
+	Region        string
+	ProposerModel string // optional; "" means "use the proposer's default"
+	RouterModel   string // optional; "" means "use the router's default"
+}
+
+// llmConfigFromEnv reads CASPER_LLM_BACKEND and the appropriate
+// credentials/model overrides from the environment. Defaults to the
+// Anthropic-API path; switching to Bedrock requires CASPER_LLM_BACKEND=bedrock
+// plus AWS credentials in the standard SDK chain.
+func llmConfigFromEnv() (llmCfg, error) {
+	backendStr := strings.ToLower(strings.TrimSpace(os.Getenv("CASPER_LLM_BACKEND")))
+	switch backendStr {
+	case "", "anthropic":
+		key := os.Getenv("ANTHROPIC_API_KEY")
+		if key == "" {
+			return llmCfg{}, fmt.Errorf("ANTHROPIC_API_KEY is required (or set CASPER_LLM_BACKEND=bedrock)")
+		}
+		return llmCfg{
+			Backend:       proposer.BackendAnthropic,
+			APIKey:        key,
+			ProposerModel: os.Getenv("CASPER_PROPOSER_MODEL"),
+			RouterModel:   os.Getenv("CASPER_ROUTER_MODEL"),
+		}, nil
+	case "bedrock":
+		region := os.Getenv("AWS_REGION")
+		if region == "" {
+			region = os.Getenv("AWS_DEFAULT_REGION")
+		}
+		propModel := os.Getenv("CASPER_BEDROCK_PROPOSER_MODEL")
+		routerModel := os.Getenv("CASPER_BEDROCK_ROUTER_MODEL")
+		if propModel == "" || routerModel == "" {
+			return llmCfg{}, fmt.Errorf(
+				"CASPER_BEDROCK_PROPOSER_MODEL and CASPER_BEDROCK_ROUTER_MODEL are required when CASPER_LLM_BACKEND=bedrock\n" +
+					"  (Bedrock IDs are version-pinned and account-specific — set them to the inference profile IDs you have access to,\n" +
+					"   e.g. \"us.anthropic.claude-sonnet-4-5-20250929-v1:0\" / \"us.anthropic.claude-haiku-4-5-20251001-v1:0\")")
+		}
+		return llmCfg{
+			Backend:       proposer.BackendBedrock,
+			Region:        region,
+			ProposerModel: propModel,
+			RouterModel:   routerModel,
+		}, nil
+	default:
+		return llmCfg{}, fmt.Errorf("unknown CASPER_LLM_BACKEND=%q (expected \"anthropic\" or \"bedrock\")", backendStr)
+	}
 }
 
 // runProposeFile is the legacy file-based path: reads { intent, snapshot }
 // from a JSON file, runs the rds_resize proposer.
-func runProposeFile(ctx context.Context, apiKey string, starLog eventlog.EventLog, path string) error {
+func runProposeFile(ctx context.Context, cfg llmCfg, starLog eventlog.EventLog, path string) error {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("read request: %w", err)
@@ -113,7 +179,13 @@ func runProposeFile(ctx context.Context, apiKey string, starLog eventlog.EventLo
 		return fmt.Errorf("parse request: %w", err)
 	}
 
-	prop, err := proposer.NewRDSResize(proposer.Config{APIKey: apiKey, Log: starLog})
+	prop, err := proposer.NewRDSResize(proposer.Config{
+		Backend: cfg.Backend,
+		APIKey:  cfg.APIKey,
+		Region:  cfg.Region,
+		Model:   cfg.ProposerModel,
+		Log:     starLog,
+	})
 	if err != nil {
 		return fmt.Errorf("build proposer: %w", err)
 	}
@@ -123,8 +195,14 @@ func runProposeFile(ctx context.Context, apiKey string, starLog eventlog.EventLo
 // runProposeNL is the NL-routing path: uses the cheap classifier to
 // pick an action type, then runs the matching per-action proposer
 // with the snapshot fields supplied as flags.
-func runProposeNL(ctx context.Context, apiKey string, starLog eventlog.EventLog) error {
-	router, err := proposer.NewRouter(proposer.RouterConfig{APIKey: apiKey, Log: starLog})
+func runProposeNL(ctx context.Context, cfg llmCfg, starLog eventlog.EventLog) error {
+	router, err := proposer.NewRouter(proposer.RouterConfig{
+		Backend: cfg.Backend,
+		APIKey:  cfg.APIKey,
+		Region:  cfg.Region,
+		Model:   cfg.RouterModel,
+		Log:     starLog,
+	})
 	if err != nil {
 		return fmt.Errorf("build router: %w", err)
 	}
@@ -163,7 +241,13 @@ func runProposeNL(ctx context.Context, apiKey string, starLog eventlog.EventLog)
 	}
 	req := proposer.Request{Intent: proposeIntent, Snapshot: snapshot}
 
-	prop, err := proposer.NewForAction(routing.ActionType, proposer.Config{APIKey: apiKey, Log: starLog})
+	prop, err := proposer.NewForAction(routing.ActionType, proposer.Config{
+		Backend: cfg.Backend,
+		APIKey:  cfg.APIKey,
+		Region:  cfg.Region,
+		Model:   cfg.ProposerModel,
+		Log:     starLog,
+	})
 	if err != nil {
 		return fmt.Errorf("build proposer: %w", err)
 	}

@@ -10,15 +10,16 @@ import (
 
 	starling "github.com/jerkeyray/starling"
 	"github.com/jerkeyray/starling/eventlog"
-	"github.com/jerkeyray/starling/provider/anthropic"
 	"github.com/jerkeyray/starling/tool"
 
 	"github.com/ASHUTOSH-SWAIN-GIT/casper/internal/action"
 )
 
-// DefaultRouterModel is the model used for NL routing. Haiku is ~5x
-// cheaper than Sonnet and the routing task is simple enough that the
-// extra capability of larger models doesn't justify the cost.
+// DefaultRouterModel is the Anthropic-API model used for NL routing.
+// Haiku is ~5x cheaper than Sonnet and the routing task is simple
+// enough that the extra capability of larger models doesn't justify
+// the cost. When Backend=BackendBedrock, the model is required (no
+// default — see Config docs in proposer.go).
 const DefaultRouterModel = "claude-haiku-4-5"
 
 // Routing is what the router emits.
@@ -48,8 +49,19 @@ func (c *routerCapture) get() *Routing             { return c.out }
 
 // RouterConfig configures a Router.
 type RouterConfig struct {
-	APIKey  string            // ANTHROPIC_API_KEY
-	Model   string            // optional, defaults to DefaultRouterModel
+	// Backend picks the LLM service. Defaults to BackendAnthropic.
+	Backend Backend
+
+	// APIKey is required when Backend=BackendAnthropic.
+	APIKey string
+
+	// Region is used when Backend=BackendBedrock.
+	Region string
+
+	// Model is the model identifier. Required when Backend=BackendBedrock.
+	// Optional for Anthropic — defaults to DefaultRouterModel.
+	Model string
+
 	Log     eventlog.EventLog // required — Starling's run log
 	Timeout time.Duration     // optional, defaults to 20s
 }
@@ -58,23 +70,29 @@ type RouterConfig struct {
 // agent — separate from the per-action proposer — because its prompt,
 // tool, and model differ.
 func NewRouter(c RouterConfig) (*Router, error) {
-	if c.APIKey == "" {
-		return nil, errors.New("APIKey is required")
-	}
 	if c.Log == nil {
 		return nil, errors.New("Log is required")
-	}
-	if c.Model == "" {
-		c.Model = DefaultRouterModel
 	}
 	ttl := c.Timeout
 	if ttl == 0 {
 		ttl = 20 * time.Second
 	}
 
-	prov, err := anthropic.New(anthropic.WithAPIKey(c.APIKey))
+	// Reuse the proposer's provider builder by wrapping the router
+	// config in a Config; the only differences (model default, budget,
+	// system prompt) are applied here.
+	asProposerConfig := Config{
+		Backend: c.Backend,
+		APIKey:  c.APIKey,
+		Region:  c.Region,
+		Model:   c.Model,
+	}
+	if c.Model == "" && c.Backend == BackendAnthropic {
+		asProposerConfig.Model = DefaultRouterModel
+	}
+	prov, model, err := buildProvider(asProposerConfig)
 	if err != nil {
-		return nil, fmt.Errorf("anthropic provider: %w", err)
+		return nil, err
 	}
 
 	cap := &routerCapture{}
@@ -83,7 +101,7 @@ func NewRouter(c RouterConfig) (*Router, error) {
 		Tools:    []tool.Tool{buildClassifyTool(cap)},
 		Log:      c.Log,
 		Config: starling.Config{
-			Model:        c.Model,
+			Model:        model,
 			SystemPrompt: routerSystemPrompt(),
 			MaxTurns:     2,
 		},
