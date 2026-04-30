@@ -77,9 +77,79 @@ func (c *Client) callRDS(ctx context.Context, call plan.APICall) (interpreter.Re
 		}
 		return wrap(out, out.ResultMetadata)
 
+	case "CreateDBSnapshot":
+		var in rds.CreateDBSnapshotInput
+		if err := remarshal(call.Params, &in); err != nil {
+			return interpreter.Response{}, fmt.Errorf("decode params: %w", err)
+		}
+		out, err := c.rds.CreateDBSnapshot(ctx, &in)
+		if err != nil {
+			return interpreter.Response{}, err
+		}
+		return wrap(out, out.ResultMetadata)
+
+	case "DeleteDBSnapshot":
+		var in rds.DeleteDBSnapshotInput
+		if err := remarshal(call.Params, &in); err != nil {
+			return interpreter.Response{}, fmt.Errorf("decode params: %w", err)
+		}
+		out, err := c.rds.DeleteDBSnapshot(ctx, &in)
+		if err != nil {
+			return interpreter.Response{}, err
+		}
+		return wrap(out, out.ResultMetadata)
+
+	case "DescribeDBSnapshots":
+		var in rds.DescribeDBSnapshotsInput
+		if err := remarshal(call.Params, &in); err != nil {
+			return interpreter.Response{}, fmt.Errorf("decode params: %w", err)
+		}
+		out, err := c.rds.DescribeDBSnapshots(ctx, &in)
+		if err != nil {
+			// AWS returns DBSnapshotNotFound (404) when polling for a deleted
+			// snapshot — treat that as a successful "snapshot is gone" signal
+			// by returning an empty body so the verify predicate (DBSnapshots
+			// empty) holds. Other errors propagate.
+			if isSnapshotNotFound(err) {
+				return interpreter.Response{
+					Body:      map[string]any{"DBSnapshots": []any{}},
+					RequestID: "",
+				}, nil
+			}
+			return interpreter.Response{}, err
+		}
+		return wrap(out, out.ResultMetadata)
+
 	default:
 		return interpreter.Response{}, fmt.Errorf("unsupported rds operation: %q", call.Operation)
 	}
+}
+
+// isSnapshotNotFound reports whether the error is RDS's DBSnapshotNotFound,
+// which we want to treat as "the snapshot is gone" rather than as a hard
+// error during rollback verification.
+func isSnapshotNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	// aws-sdk-go-v2 surfaces this as "DBSnapshotNotFound: ..." at the top
+	// of the wrapped error chain. String matching is fragile but adequate
+	// for v1 — we can swap to typed errors.As once we add more handlers.
+	return contains(msg, "DBSnapshotNotFound")
+}
+
+func contains(s, sub string) bool {
+	return len(sub) > 0 && len(s) >= len(sub) && indexOf(s, sub) >= 0
+}
+
+func indexOf(s, sub string) int {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return i
+		}
+	}
+	return -1
 }
 
 func (c *Client) callCloudWatch(ctx context.Context, call plan.APICall) (interpreter.Response, error) {

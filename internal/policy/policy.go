@@ -2,14 +2,23 @@
 //
 // The policy engine evaluates a proposal (and, in future, simulator
 // output) against a Rego policy module, then returns a Verdict the
-// trust layer can act on. The Rego module is embedded at compile time
-// — there is no runtime "load policy from path" code path. Updating
-// the policy is a code change.
+// trust layer can act on. The Rego modules are embedded at compile
+// time — there is no runtime "load policy from path" code path.
+// Updating the policy is a code change.
+//
+// Each registered action type has its own Rego module; the engine
+// holds a prepared query per type. Adding a new action means:
+//
+//  1. Drop a `rules_<action>.rego` file in this package.
+//  2. Embed it via //go:embed in this file's `init()`.
+//  3. Register it under the same `data.casper.<action>.result` query
+//     path that the action's `Spec.PolicyQuery` claims.
 //
 // Importantly: a verdict only describes what *should* happen. The
 // caller decides whether to honor it. The CLI honors verdicts
-// strictly today (deny + needs_approval both abort); a future approval
-// flow will turn needs_approval into "wait for a signed approval".
+// strictly today (deny + needs_approval both abort); a future
+// approval flow will turn needs_approval into "wait for a signed
+// approval".
 package policy
 
 import (
@@ -23,8 +32,14 @@ import (
 	"github.com/ASHUTOSH-SWAIN-GIT/casper/internal/action"
 )
 
+// Embedded Rego modules — one per action type. The compiler is fed
+// every module so cross-action references would also work, though
+// today each action's rules live in their own package.
 //go:embed rules.rego
-var rulesRego []byte
+var rulesRDSResize []byte
+
+//go:embed rules_rds_create_snapshot.rego
+var rulesRDSCreateSnapshot []byte
 
 // Decision is the verdict triple. A future v2 may add "irreversible"
 // or "needs_multi_party_approval" — for v1 the three values below are
@@ -32,9 +47,9 @@ var rulesRego []byte
 type Decision string
 
 const (
-	DecisionAllow          Decision = "allow"
-	DecisionDeny           Decision = "deny"
-	DecisionNeedsApproval  Decision = "needs_approval"
+	DecisionAllow         Decision = "allow"
+	DecisionDeny          Decision = "deny"
+	DecisionNeedsApproval Decision = "needs_approval"
 )
 
 // Verdict is what the engine returns. Reason is a single human-
@@ -45,33 +60,47 @@ type Verdict struct {
 	Reason   string   `json:"reason"`
 }
 
-// Engine wraps an OPA prepared query. Construction compiles the
-// embedded policy once; Evaluate is then cheap to call repeatedly.
+// Engine wraps prepared OPA queries — one per action type. It is
+// safe to share across goroutines; PreparedEvalQuery is goroutine-safe.
 type Engine struct {
-	pq rego.PreparedEvalQuery
+	queries map[string]rego.PreparedEvalQuery // keyed by action type
 }
 
-// NewEngine compiles the embedded policy. Returns an error if the
-// Rego module is malformed (caught at startup, not at evaluation).
+// NewEngine compiles every embedded policy module. Returns an error
+// if any module is malformed (caught at startup, not at evaluation).
 func NewEngine(ctx context.Context) (*Engine, error) {
-	r := rego.New(
-		rego.Query("data.casper.rds_resize.result"),
-		rego.Module("rules.rego", string(rulesRego)),
-	)
-	pq, err := r.PrepareForEval(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("compile policy: %w", err)
+	modules := map[string][]byte{
+		"rds_resize":          rulesRDSResize,
+		"rds_create_snapshot": rulesRDSCreateSnapshot,
 	}
-	return &Engine{pq: pq}, nil
+
+	queries := make(map[string]rego.PreparedEvalQuery, len(modules))
+	for actionType, src := range modules {
+		spec, ok := action.Lookup(actionType)
+		if !ok {
+			return nil, fmt.Errorf("policy: action %q not in registry", actionType)
+		}
+		r := rego.New(
+			rego.Query(spec.PolicyQuery),
+			rego.Module("rules_"+actionType+".rego", string(src)),
+		)
+		pq, err := r.PrepareForEval(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("compile %s policy: %w", actionType, err)
+		}
+		queries[actionType] = pq
+	}
+	return &Engine{queries: queries}, nil
 }
 
-// EvaluateRDSResize runs the policy against a single proposal.
-// The function name encodes the action type — different actions get
-// different evaluators when more land in v2.
-func (e *Engine) EvaluateRDSResize(ctx context.Context, p action.RDSResizeProposal) (Verdict, error) {
-	rs, err := e.pq.Eval(ctx, rego.EvalInput(map[string]any{
-		"proposal": p,
-	}))
+// evaluate is the generic dispatch. Every action-specific Evaluate*
+// method funnels through here.
+func (e *Engine) evaluate(ctx context.Context, actionType string, proposal any) (Verdict, error) {
+	pq, ok := e.queries[actionType]
+	if !ok {
+		return Verdict{}, fmt.Errorf("policy: no rules registered for %q", actionType)
+	}
+	rs, err := pq.Eval(ctx, rego.EvalInput(map[string]any{"proposal": proposal}))
 	if err != nil {
 		return Verdict{}, fmt.Errorf("evaluate: %w", err)
 	}
@@ -87,8 +116,15 @@ func (e *Engine) EvaluateRDSResize(ctx context.Context, p action.RDSResizePropos
 	if decision == "" {
 		return Verdict{}, errors.New("policy result missing decision")
 	}
-	return Verdict{
-		Decision: Decision(decision),
-		Reason:   reason,
-	}, nil
+	return Verdict{Decision: Decision(decision), Reason: reason}, nil
+}
+
+// EvaluateRDSResize runs the policy against an rds_resize proposal.
+func (e *Engine) EvaluateRDSResize(ctx context.Context, p action.RDSResizeProposal) (Verdict, error) {
+	return e.evaluate(ctx, "rds_resize", p)
+}
+
+// EvaluateRDSCreateSnapshot runs the policy against a snapshot proposal.
+func (e *Engine) EvaluateRDSCreateSnapshot(ctx context.Context, p action.RDSCreateSnapshotProposal) (Verdict, error) {
+	return e.evaluate(ctx, "rds_create_snapshot", p)
 }
