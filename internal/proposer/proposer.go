@@ -114,6 +114,16 @@ func NewRDSStorageGrow(c Config) (*Proposer, error) {
 	return &Proposer{agent: a, captured: cap, actionType: "rds_storage_grow"}, nil
 }
 
+// NewRDSDeleteSnapshot constructs an rds_delete_snapshot proposer.
+func NewRDSDeleteSnapshot(c Config) (*Proposer, error) {
+	cap := &captured{}
+	a, err := buildAgent(c, rdsDeleteSnapshotSystemPrompt, []tool.Tool{buildRDSDeleteSnapshotProposeTool(cap)})
+	if err != nil {
+		return nil, err
+	}
+	return &Proposer{agent: a, captured: cap, actionType: "rds_delete_snapshot"}, nil
+}
+
 // NewForAction is the generic dispatcher used by the CLI's NL mode.
 // It looks up the action type in the registry and returns the
 // matching Proposer.
@@ -134,6 +144,8 @@ func NewForAction(actionType string, c Config) (*Proposer, error) {
 		return NewRDSModifyMultiAZ(c)
 	case "rds_storage_grow":
 		return NewRDSStorageGrow(c)
+	case "rds_delete_snapshot":
+		return NewRDSDeleteSnapshot(c)
 	default:
 		return nil, fmt.Errorf("no proposer wired for action type %q (registered but not yet implemented)", actionType)
 	}

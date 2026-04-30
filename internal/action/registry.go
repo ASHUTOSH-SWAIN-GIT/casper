@@ -102,6 +102,14 @@ var Registry = map[string]Spec{
 		PolicyDefault: "deny", // fail-closed default for irreversible actions
 		PolicyQuery:   "data.casper.rds_storage_grow.result",
 	},
+	"rds_delete_snapshot": {
+		Type:          "rds_delete_snapshot",
+		Service:       "rds",
+		Description:   "Permanently delete a manual RDS snapshot (irreversible — data is gone)",
+		Reversibility: "irreversible",
+		PolicyDefault: "deny",
+		PolicyQuery:   "data.casper.rds_delete_snapshot.result",
+	},
 }
 
 // Lookup returns the Spec for an action type, or false if unregistered.

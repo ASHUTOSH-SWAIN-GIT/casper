@@ -59,6 +59,11 @@ func detectActionType(raw []byte) (string, error) {
 	switch {
 	case probe["target_instance_class"] != nil:
 		return "rds_resize", nil
+	// rds_delete_snapshot must be checked before rds_create_snapshot:
+	// both carry snapshot_identifier; only create_snapshot also carries
+	// db_instance_identifier (the source instance the snapshot is taken from).
+	case probe["snapshot_identifier"] != nil && probe["db_instance_identifier"] == nil:
+		return "rds_delete_snapshot", nil
 	case probe["snapshot_identifier"] != nil:
 		return "rds_create_snapshot", nil
 	case probe["target_retention_days"] != nil:
@@ -89,6 +94,8 @@ func validateForActionType(raw []byte, actionType string) error {
 		return action.ValidateRDSModifyMultiAZ(raw)
 	case "rds_storage_grow":
 		return action.ValidateRDSStorageGrow(raw)
+	case "rds_delete_snapshot":
+		return action.ValidateRDSDeleteSnapshot(raw)
 	default:
 		return fmt.Errorf("no validator registered for action type %q", actionType)
 	}

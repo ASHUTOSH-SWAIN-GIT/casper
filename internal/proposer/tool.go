@@ -331,6 +331,53 @@ func buildRDSStorageGrowProposeTool(c *captured) tool.Tool {
 	)
 }
 
+// ──────────────────────────────────────────────────────────────────
+// rds_delete_snapshot action (IRREVERSIBLE)
+// ──────────────────────────────────────────────────────────────────
+
+type rdsDeleteSnapshotProposeInput struct {
+	SnapshotIdentifier string `json:"snapshot_identifier" jsonschema:"description=The snapshot to delete. THIS IS IRREVERSIBLE — once deleted, the data is gone."`
+	Region             string `json:"region" jsonschema:"description=AWS region the snapshot lives in (e.g. us-east-1)."`
+	Reasoning          string `json:"reasoning" jsonschema:"description=Short rationale. The reasoning should acknowledge that deletion is irreversible."`
+}
+
+func buildRDSDeleteSnapshotProposeTool(c *captured) tool.Tool {
+	return tool.Typed(
+		"propose_rds_delete_snapshot",
+		"Emit exactly one structured RDS snapshot deletion proposal. THIS ACTION IS IRREVERSIBLE. Call this exactly once with all fields populated.",
+		func(ctx context.Context, in rdsDeleteSnapshotProposeInput) (proposeOutput, error) {
+			if in.SnapshotIdentifier == "" {
+				return proposeOutput{}, errors.New("snapshot_identifier required")
+			}
+			raw, err := json.Marshal(in)
+			if err != nil {
+				return proposeOutput{}, fmt.Errorf("marshal proposal: %w", err)
+			}
+			if err := action.ValidateRDSDeleteSnapshot(raw); err != nil {
+				return proposeOutput{}, fmt.Errorf("schema validation: %w", err)
+			}
+			h, err := action.Hash(raw)
+			if err != nil {
+				return proposeOutput{}, fmt.Errorf("hash proposal: %w", err)
+			}
+			c.set(raw, h)
+			return proposeOutput{Hash: string(h)}, nil
+		},
+	)
+}
+
+const rdsDeleteSnapshotSystemPrompt = `You are Casper's RDS snapshot-deletion proposer.
+
+This action is IRREVERSIBLE: once a snapshot is deleted, AWS does not retain it — the data is permanently gone. Casper's policy defaults to deny and never auto-allows. Even valid proposals always require human approval.
+
+Hard constraints:
+- You must call propose_rds_delete_snapshot exactly ONCE.
+- The snapshot must exist and have status "available".
+- Do not propose deleting a snapshot whose identifier contains "prod" — Casper's policy hard-denies these.
+- Acknowledge the irreversibility in "reasoning". Example: "Snapshot is 90 days old, predates the migration; manual cleanup. Deletion is irreversible — verified the snapshot is not referenced by any active restore."
+
+Be conservative — when in doubt, prefer NOT to propose deletion. The cost of leaving an unused snapshot is small ($0.095/GB-month); the cost of deleting one that's still needed is unbounded.`
+
 const rdsStorageGrowSystemPrompt = `You are Casper's RDS storage-grow proposer.
 
 This action is IRREVERSIBLE: AWS does not support shrinking allocated storage on an existing RDS instance. Your proposal will be evaluated by a policy that defaults to deny — even valid proposals require explicit human approval.

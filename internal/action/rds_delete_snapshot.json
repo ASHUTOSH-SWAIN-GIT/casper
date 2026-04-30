@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://casper.dev/schemas/rds_delete_snapshot.schema.json",
+  "title": "RDSDeleteSnapshotProposal",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "snapshot_identifier",
+    "region",
+    "reasoning"
+  ],
+  "properties": {
+    "snapshot_identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255,
+      "pattern": "^[a-zA-Z][a-zA-Z0-9-]*$"
+    },
+    "region": {
+      "type": "string",
+      "pattern": "^[a-z]{2}-[a-z]+-[0-9]+$"
+    },
+    "reasoning": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}
