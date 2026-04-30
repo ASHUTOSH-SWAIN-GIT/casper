@@ -36,3 +36,7 @@ casper_proposer.db
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Next.js build output (in case scratch UI lands here again)
+.next/
+node_modules/
