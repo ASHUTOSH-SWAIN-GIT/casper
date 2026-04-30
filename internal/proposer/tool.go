@@ -445,6 +445,66 @@ func buildRDSModifyEngineVersionProposeTool(c *captured) tool.Tool {
 	)
 }
 
+// ──────────────────────────────────────────────────────────────────
+// rds_restore_from_snapshot action
+// ──────────────────────────────────────────────────────────────────
+
+type rdsRestoreFromSnapshotProposeInput struct {
+	SnapshotIdentifier         string `json:"snapshot_identifier" jsonschema:"description=The source snapshot to restore from."`
+	TargetDBInstanceIdentifier string `json:"target_db_instance_identifier" jsonschema:"description=Identifier for the new restored instance. Use 'casper-<short-tag>' to qualify for auto-approval."`
+	Region                     string `json:"region" jsonschema:"description=AWS region the snapshot lives in."`
+	TargetInstanceClass        string `json:"target_instance_class" jsonschema:"description=Instance class for the restored instance (e.g. db.t4g.small)."`
+	Reasoning                  string `json:"reasoning" jsonschema:"description=Short rationale. Note that the restored instance is a full second instance, billed per hour."`
+}
+
+func buildRDSRestoreFromSnapshotProposeTool(c *captured) tool.Tool {
+	return tool.Typed(
+		"propose_rds_restore_from_snapshot",
+		"Emit exactly one structured RDS restore-from-snapshot proposal. Call this exactly once with all fields populated.",
+		func(ctx context.Context, in rdsRestoreFromSnapshotProposeInput) (proposeOutput, error) {
+			if in.SnapshotIdentifier == "" {
+				return proposeOutput{}, errors.New("snapshot_identifier required")
+			}
+			if in.TargetDBInstanceIdentifier == "" {
+				return proposeOutput{}, errors.New("target_db_instance_identifier required")
+			}
+			raw, err := json.Marshal(in)
+			if err != nil {
+				return proposeOutput{}, fmt.Errorf("marshal proposal: %w", err)
+			}
+			if err := action.ValidateRDSRestoreFromSnapshot(raw); err != nil {
+				return proposeOutput{}, fmt.Errorf("schema validation: %w", err)
+			}
+			h, err := action.Hash(raw)
+			if err != nil {
+				return proposeOutput{}, fmt.Errorf("hash proposal: %w", err)
+			}
+			c.set(raw, h)
+			return proposeOutput{Hash: string(h)}, nil
+		},
+	)
+}
+
+const rdsRestoreFromSnapshotSystemPrompt = `You are Casper's RDS restore-from-snapshot proposer.
+
+Your only job is to turn a natural-language intent and an infrastructure snapshot into exactly one structured proposal by calling the propose_rds_restore_from_snapshot tool.
+
+Hard constraints:
+- You must call propose_rds_restore_from_snapshot exactly ONCE.
+- "snapshot_identifier" must equal the snapshot's name verbatim (the operator names the source snapshot).
+- "target_db_instance_identifier" must NOT equal snapshot_identifier — it's a different resource.
+- "target_instance_class" must start with "db." (RDS instance class).
+
+How to choose target_db_instance_identifier:
+- Use "casper-<short-tag>" or "casper-restored-<source-tag>" to qualify for auto-approval.
+- Pick a tag that conveys purpose: e.g. "casper-restored-prod-2026-04-30" or "casper-orders-test-restore".
+
+How to choose target_instance_class:
+- Default to a reasonable class for the workload: smaller for testing, equal/larger for production failover.
+- Note that the restored instance is a full new instance, billed per hour. Mention this in reasoning.
+
+Be aware: the source snapshot is unchanged by this action. Rollback (if forward fails) deletes the new instance only.`
+
 const rdsModifyEngineVersionSystemPrompt = `You are Casper's RDS engine-version upgrade proposer.
 
 This action is IRREVERSIBLE: AWS does not support downgrading an engine version. Casper's policy defaults to deny and only allows minor-version upgrades through to needs_approval.

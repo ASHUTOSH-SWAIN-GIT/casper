@@ -98,6 +98,17 @@ func (c *Client) callRDS(ctx context.Context, call plan.APICall) (interpreter.Re
 		}
 		return wrap(out, out.ResultMetadata)
 
+	case "RestoreDBInstanceFromDBSnapshot":
+		var in rds.RestoreDBInstanceFromDBSnapshotInput
+		if err := remarshal(call.Params, &in); err != nil {
+			return interpreter.Response{}, fmt.Errorf("decode params: %w", err)
+		}
+		out, err := c.rds.RestoreDBInstanceFromDBSnapshot(ctx, &in)
+		if err != nil {
+			return interpreter.Response{}, err
+		}
+		return wrap(out, out.ResultMetadata)
+
 	case "RebootDBInstance":
 		var in rds.RebootDBInstanceInput
 		if err := remarshal(call.Params, &in); err != nil {

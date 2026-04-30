@@ -57,7 +57,13 @@ func detectActionType(raw []byte) (string, error) {
 		return v, nil // explicit field wins (forward-compat)
 	}
 	switch {
-	case probe["target_instance_class"] != nil:
+	// rds_restore_from_snapshot is checked first: it shares
+	// snapshot_identifier with create/delete-snapshot AND
+	// target_instance_class with rds_resize, so the most specific
+	// case (both fields together) must come before the others.
+	case probe["snapshot_identifier"] != nil && probe["target_db_instance_identifier"] != nil:
+		return "rds_restore_from_snapshot", nil
+	case probe["target_instance_class"] != nil && probe["snapshot_identifier"] == nil:
 		return "rds_resize", nil
 	// rds_delete_snapshot must be checked before rds_create_snapshot:
 	// both carry snapshot_identifier; only create_snapshot also carries
@@ -104,6 +110,8 @@ func validateForActionType(raw []byte, actionType string) error {
 		return action.ValidateRDSCreateReadReplica(raw)
 	case "rds_modify_engine_version":
 		return action.ValidateRDSModifyEngineVersion(raw)
+	case "rds_restore_from_snapshot":
+		return action.ValidateRDSRestoreFromSnapshot(raw)
 	default:
 		return fmt.Errorf("no validator registered for action type %q", actionType)
 	}

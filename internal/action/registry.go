@@ -126,6 +126,14 @@ var Registry = map[string]Spec{
 		PolicyDefault: "deny",
 		PolicyQuery:   "data.casper.rds_modify_engine_version.result",
 	},
+	"rds_restore_from_snapshot": {
+		Type:          "rds_restore_from_snapshot",
+		Service:       "rds",
+		Description:   "Restore an RDS snapshot to a new instance (additive — snapshot is unchanged)",
+		Reversibility: "reversible", // delete the new instance
+		PolicyDefault: "needs_approval",
+		PolicyQuery:   "data.casper.rds_restore_from_snapshot.result",
+	},
 }
 
 // Lookup returns the Spec for an action type, or false if unregistered.

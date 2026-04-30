@@ -144,6 +144,16 @@ func NewRDSModifyEngineVersion(c Config) (*Proposer, error) {
 	return &Proposer{agent: a, captured: cap, actionType: "rds_modify_engine_version"}, nil
 }
 
+// NewRDSRestoreFromSnapshot constructs an rds_restore_from_snapshot proposer.
+func NewRDSRestoreFromSnapshot(c Config) (*Proposer, error) {
+	cap := &captured{}
+	a, err := buildAgent(c, rdsRestoreFromSnapshotSystemPrompt, []tool.Tool{buildRDSRestoreFromSnapshotProposeTool(cap)})
+	if err != nil {
+		return nil, err
+	}
+	return &Proposer{agent: a, captured: cap, actionType: "rds_restore_from_snapshot"}, nil
+}
+
 // NewForAction is the generic dispatcher used by the CLI's NL mode.
 // It looks up the action type in the registry and returns the
 // matching Proposer.
@@ -170,6 +180,8 @@ func NewForAction(actionType string, c Config) (*Proposer, error) {
 		return NewRDSCreateReadReplica(c)
 	case "rds_modify_engine_version":
 		return NewRDSModifyEngineVersion(c)
+	case "rds_restore_from_snapshot":
+		return NewRDSRestoreFromSnapshot(c)
 	default:
 		return nil, fmt.Errorf("no proposer wired for action type %q (registered but not yet implemented)", actionType)
 	}
