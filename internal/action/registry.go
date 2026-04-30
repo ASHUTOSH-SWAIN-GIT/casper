@@ -118,6 +118,14 @@ var Registry = map[string]Spec{
 		PolicyDefault: "needs_approval",
 		PolicyQuery:   "data.casper.rds_create_read_replica.result",
 	},
+	"rds_modify_engine_version": {
+		Type:          "rds_modify_engine_version",
+		Service:       "rds",
+		Description:   "Upgrade an RDS instance's engine version (irreversible — AWS does not support downgrades)",
+		Reversibility: "irreversible",
+		PolicyDefault: "deny",
+		PolicyQuery:   "data.casper.rds_modify_engine_version.result",
+	},
 }
 
 // Lookup returns the Spec for an action type, or false if unregistered.

@@ -278,6 +278,35 @@ func buildRunnable(raw []byte) (*runnable, error) {
 			},
 		}, nil
 
+	case "rds_modify_engine_version":
+		var p action.RDSModifyEngineVersionProposal
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return nil, fmt.Errorf("decode proposal: %w", err)
+		}
+		return &runnable{
+			ActionType: "rds_modify_engine_version",
+			Hash:       h,
+			Region:     p.Region,
+			ProposalAuditPayload: map[string]any{
+				"action_type":                 "rds_modify_engine_version",
+				"db_instance_identifier":      p.DBInstanceIdentifier,
+				"region":                      p.Region,
+				"current_engine_version":      p.CurrentEngineVersion,
+				"target_engine_version":       p.TargetEngineVersion,
+				"allow_major_version_upgrade": p.AllowMajorVersionUpgrade,
+				"reversibility":               "irreversible",
+			},
+			EvaluatePolicy: func(ctx context.Context, e *policy.Engine) (policy.Verdict, error) {
+				return e.EvaluateRDSModifyEngineVersion(ctx, p)
+			},
+			Compile: func() (plan.ExecutionPlan, plan.ExecutionPlan) {
+				return plan.CompileRDSModifyEngineVersion(p, h)
+			},
+			SessionPolicy: func(accountID string) identity.SessionPolicy {
+				return identity.BuildRDSModifyEngineVersionPolicy(p, accountID)
+			},
+		}, nil
+
 	default:
 		return nil, fmt.Errorf("no runner registered for action type %q", actionType)
 	}

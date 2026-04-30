@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://casper.dev/schemas/rds_modify_engine_version.schema.json",
+  "title": "RDSModifyEngineVersionProposal",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "db_instance_identifier",
+    "region",
+    "current_engine_version",
+    "target_engine_version",
+    "allow_major_version_upgrade",
+    "apply_immediately",
+    "reasoning"
+  ],
+  "properties": {
+    "db_instance_identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 63,
+      "pattern": "^[a-zA-Z][a-zA-Z0-9-]*$"
+    },
+    "region": {
+      "type": "string",
+      "pattern": "^[a-z]{2}-[a-z]+-[0-9]+$"
+    },
+    "current_engine_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "target_engine_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "allow_major_version_upgrade": {
+      "type": "boolean"
+    },
+    "apply_immediately": {
+      "type": "boolean",
+      "const": true
+    },
+    "reasoning": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

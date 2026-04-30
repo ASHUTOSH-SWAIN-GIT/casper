@@ -59,6 +59,9 @@ var rulesRDSDeleteSnapshot []byte
 //go:embed rules_rds_create_read_replica.rego
 var rulesRDSCreateReadReplica []byte
 
+//go:embed rules_rds_modify_engine_version.rego
+var rulesRDSModifyEngineVersion []byte
+
 // Decision is the verdict triple. A future v2 may add "irreversible"
 // or "needs_multi_party_approval" — for v1 the three values below are
 // sufficient.
@@ -96,6 +99,7 @@ func NewEngine(ctx context.Context) (*Engine, error) {
 		"rds_storage_grow":            rulesRDSStorageGrow,
 		"rds_delete_snapshot":         rulesRDSDeleteSnapshot,
 		"rds_create_read_replica":     rulesRDSCreateReadReplica,
+		"rds_modify_engine_version":   rulesRDSModifyEngineVersion,
 	}
 
 	queries := make(map[string]rego.PreparedEvalQuery, len(modules))
@@ -181,4 +185,9 @@ func (e *Engine) EvaluateRDSDeleteSnapshot(ctx context.Context, p action.RDSDele
 // EvaluateRDSCreateReadReplica runs the policy against a read-replica proposal.
 func (e *Engine) EvaluateRDSCreateReadReplica(ctx context.Context, p action.RDSCreateReadReplicaProposal) (Verdict, error) {
 	return e.evaluate(ctx, "rds_create_read_replica", p)
+}
+
+// EvaluateRDSModifyEngineVersion runs the policy against an engine-upgrade proposal.
+func (e *Engine) EvaluateRDSModifyEngineVersion(ctx context.Context, p action.RDSModifyEngineVersionProposal) (Verdict, error) {
+	return e.evaluate(ctx, "rds_modify_engine_version", p)
 }

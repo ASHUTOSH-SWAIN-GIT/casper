@@ -406,6 +406,58 @@ func buildRDSCreateReadReplicaProposeTool(c *captured) tool.Tool {
 	)
 }
 
+// ──────────────────────────────────────────────────────────────────
+// rds_modify_engine_version action (IRREVERSIBLE)
+// ──────────────────────────────────────────────────────────────────
+
+type rdsModifyEngineVersionProposeInput struct {
+	DBInstanceIdentifier     string `json:"db_instance_identifier" jsonschema:"description=The RDS instance to upgrade."`
+	Region                   string `json:"region" jsonschema:"description=AWS region the instance lives in."`
+	CurrentEngineVersion     string `json:"current_engine_version" jsonschema:"description=Current engine version (must match the snapshot)."`
+	TargetEngineVersion      string `json:"target_engine_version" jsonschema:"description=Target engine version. Must be greater than current."`
+	AllowMajorVersionUpgrade bool   `json:"allow_major_version_upgrade" jsonschema:"description=Whether to allow crossing a major version boundary. Casper currently denies all major version upgrades — set false."`
+	ApplyImmediately         bool   `json:"apply_immediately" jsonschema:"description=Must be true."`
+	Reasoning                string `json:"reasoning" jsonschema:"description=Short rationale. Acknowledge that engine upgrades are irreversible."`
+}
+
+func buildRDSModifyEngineVersionProposeTool(c *captured) tool.Tool {
+	return tool.Typed(
+		"propose_rds_modify_engine_version",
+		"Emit exactly one structured RDS engine-version upgrade proposal. THIS ACTION IS IRREVERSIBLE. Call this exactly once with all fields populated.",
+		func(ctx context.Context, in rdsModifyEngineVersionProposeInput) (proposeOutput, error) {
+			if in.DBInstanceIdentifier == "" {
+				return proposeOutput{}, errors.New("db_instance_identifier required")
+			}
+			raw, err := json.Marshal(in)
+			if err != nil {
+				return proposeOutput{}, fmt.Errorf("marshal proposal: %w", err)
+			}
+			if err := action.ValidateRDSModifyEngineVersion(raw); err != nil {
+				return proposeOutput{}, fmt.Errorf("schema validation: %w", err)
+			}
+			h, err := action.Hash(raw)
+			if err != nil {
+				return proposeOutput{}, fmt.Errorf("hash proposal: %w", err)
+			}
+			c.set(raw, h)
+			return proposeOutput{Hash: string(h)}, nil
+		},
+	)
+}
+
+const rdsModifyEngineVersionSystemPrompt = `You are Casper's RDS engine-version upgrade proposer.
+
+This action is IRREVERSIBLE: AWS does not support downgrading an engine version. Casper's policy defaults to deny and only allows minor-version upgrades through to needs_approval.
+
+Hard constraints:
+- You must call propose_rds_modify_engine_version exactly ONCE.
+- "current_engine_version" must equal the snapshot's engine_version verbatim.
+- "target_engine_version" must be greater than current and follow the engine's version format.
+- "allow_major_version_upgrade" should be FALSE — Casper hard-denies major version upgrades. If the operator asks for a major upgrade, set false and explain in reasoning that the request needs to go through a different channel (snapshot+restore in a new instance).
+- "apply_immediately" must be true.
+
+Pick a target version one minor step above current (e.g. PostgreSQL 16.4 → 16.5, MySQL 8.0.36 → 8.0.37). Do not skip minor versions in a single proposal — multiple small upgrades are easier to verify than one big one.`
+
 const rdsCreateReadReplicaSystemPrompt = `You are Casper's RDS read-replica proposer.
 
 Your only job is to turn a natural-language intent and an infrastructure snapshot into exactly one structured proposal by calling the propose_rds_create_read_replica tool.
