@@ -5,9 +5,11 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -25,7 +27,7 @@ import (
 type createProposalRequest struct {
 	Intent   string `json:"intent"`
 	Region   string `json:"region,omitempty"`
-	Instance string `json:"instance,omitempty"` // override target if router fails to extract one
+	Instance string `json:"instance,omitempty"`
 }
 
 func (s *Server) handleCreateProposal(w http.ResponseWriter, r *http.Request) {
@@ -51,9 +53,6 @@ func (s *Server) handleCreateProposal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Per-request Starling event log. Using in-memory SQLite keeps
-	// agent-run replay possible without polluting the user's disk; for
-	// production we'd persist it alongside the audit DB.
 	starLog, err := starling.NewSQLite(":memory:")
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "starling_init", err.Error())
@@ -61,10 +60,10 @@ func (s *Server) handleCreateProposal(w http.ResponseWriter, r *http.Request) {
 	}
 	defer starLog.Close()
 
-	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 	defer cancel()
 
-	// 1. Route the intent.
+	// 1. Route the intent → BatchRouting (1..N actions).
 	router, err := proposer.NewRouter(proposer.RouterConfig{
 		Backend: cfg.Backend,
 		APIKey:  cfg.APIKey,
@@ -76,141 +75,196 @@ func (s *Server) handleCreateProposal(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "router_build", err.Error())
 		return
 	}
-	routing, err := router.Route(ctx, req.Intent)
+	batchRouting, err := router.Route(ctx, req.Intent)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, "router_failed", err.Error())
+		writeError(w, http.StatusBadGateway, "router_failed", "Proposal failed router run: "+err.Error())
 		return
 	}
 
-	// 2. Resolve target + region with fallbacks.
-	instance := routing.DBInstanceIdentifier
-	if req.Instance != "" {
-		instance = req.Instance
-	}
-	region := routing.Region
-	if req.Region != "" {
-		region = req.Region
-	}
-	if region == "" {
-		if v := os.Getenv("AWS_REGION"); v != "" {
-			region = v
-		} else if v := os.Getenv("AWS_DEFAULT_REGION"); v != "" {
-			region = v
-		}
-	}
-	if instance == "" {
-		writeError(w, http.StatusUnprocessableEntity, "instance_unresolved",
-			"router did not identify a target — pass 'instance' explicitly")
-		return
-	}
-	if region == "" {
-		writeError(w, http.StatusUnprocessableEntity, "region_unresolved",
-			"region not provided and AWS_REGION not set")
-		return
+	// 2. For each action, run snapshot fetch + proposer in parallel.
+	type actionResult struct {
+		routing     proposer.Routing
+		snap        proposer.Snapshot
+		res         *proposer.Result
+		proposalDoc map[string]any
+		rb          *runner.Runnable
+		verdict     policy.Verdict
 	}
 
-	// 3. Lookup resource type and fetch live state.
-	spec, ok := action.Lookup(routing.ActionType)
-	if !ok {
-		writeError(w, http.StatusInternalServerError, "action_unknown",
-			"router returned unregistered action: "+routing.ActionType)
-		return
-	}
+	results := make([]actionResult, len(batchRouting.Actions))
+	errs := make([]error, len(batchRouting.Actions))
+	var wg sync.WaitGroup
 
-	snap := proposer.Snapshot{
-		DBInstanceIdentifier: instance,
-		Region:               region,
-		Engine:               "postgres",
-		Status:               "available",
-	}
-	if spec.Resource != "" {
-		awsCfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region))
-		if err == nil {
-			fetched, fetchErr := snapshot.Fetch(ctx, awsx.New(awsCfg), spec.Resource, instance, region)
-			if fetchErr == nil {
-				snap = fetched
+	for i, routing := range batchRouting.Actions {
+		i, routing := i, routing
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			// Resolve instance + region.
+			instance := routing.DBInstanceIdentifier
+			if req.Instance != "" {
+				instance = req.Instance
 			}
+			region := routing.Region
+			if req.Region != "" {
+				region = req.Region
+			}
+			if region == "" {
+				if v := os.Getenv("AWS_REGION"); v != "" {
+					region = v
+				} else if v := os.Getenv("AWS_DEFAULT_REGION"); v != "" {
+					region = v
+				}
+			}
+			if instance == "" {
+				errs[i] = writeErrorVal("instance_unresolved", "router did not identify a target — pass 'instance' explicitly")
+				return
+			}
+			if region == "" {
+				errs[i] = writeErrorVal("region_unresolved", "region not provided and AWS_REGION not set")
+				return
+			}
+			routing.DBInstanceIdentifier = instance
+			routing.Region = region
+
+			// Fetch live state.
+			spec, ok := action.Lookup(routing.ActionType)
+			if !ok {
+				errs[i] = writeErrorVal("action_unknown", "router returned unregistered action: "+routing.ActionType)
+				return
+			}
+			snap := proposer.Snapshot{
+				DBInstanceIdentifier: instance,
+				Region:               region,
+				Engine:               "postgres",
+				Status:               "available",
+			}
+			if spec.Resource != "" {
+				if awsCfg, awsErr := config.LoadDefaultConfig(ctx, config.WithRegion(region)); awsErr == nil {
+					if fetched, fetchErr := snapshot.Fetch(ctx, awsx.New(awsCfg), spec.Resource, instance, region); fetchErr == nil {
+						snap = fetched
+					}
+				}
+			}
+
+			// Per-action proposer — each action gets its own Starling log.
+			actionLog, logErr := starling.NewSQLite(":memory:")
+			if logErr != nil {
+				errs[i] = logErr
+				return
+			}
+			defer actionLog.Close()
+
+			prop, propErr := proposer.NewForAction(routing.ActionType, proposer.Config{
+				Backend: cfg.Backend,
+				APIKey:  cfg.APIKey,
+				Region:  cfg.Region,
+				Model:   cfg.ProposerModel,
+				Log:     actionLog,
+			})
+			if propErr != nil {
+				errs[i] = propErr
+				return
+			}
+			res, propRunErr := prop.Propose(ctx, proposer.Request{Intent: req.Intent, Snapshot: snap})
+			if propRunErr != nil {
+				errs[i] = propRunErr
+				return
+			}
+
+			var proposalDoc map[string]any
+			if decErr := json.Unmarshal(res.ProposalRaw, &proposalDoc); decErr != nil {
+				errs[i] = decErr
+				return
+			}
+
+			rb, buildErr := runner.Build(res.ProposalRaw)
+			if buildErr != nil {
+				errs[i] = buildErr
+				return
+			}
+
+			engine, engineErr := policy.NewEngine(ctx)
+			if engineErr != nil {
+				errs[i] = engineErr
+				return
+			}
+			verdict, polErr := rb.EvaluatePolicy(ctx, engine)
+			if polErr != nil {
+				errs[i] = polErr
+				return
+			}
+
+			results[i] = actionResult{
+				routing:     routing,
+				snap:        snap,
+				res:         res,
+				proposalDoc: proposalDoc,
+				rb:          rb,
+				verdict:     verdict,
+			}
+		}()
+	}
+	wg.Wait()
+
+	// Check for per-action errors — return the first one.
+	for _, e := range errs {
+		if e != nil {
+			writeError(w, http.StatusBadGateway, "proposer_failed", e.Error())
+			return
 		}
 	}
 
-	// 4. Run the per-action proposer.
-	prop, err := proposer.NewForAction(routing.ActionType, proposer.Config{
-		Backend: cfg.Backend,
-		APIKey:  cfg.APIKey,
-		Region:  cfg.Region,
-		Model:   cfg.ProposerModel,
-		Log:     starLog,
-	})
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "proposer_build", err.Error())
-		return
-	}
-	res, err := prop.Propose(ctx, proposer.Request{Intent: req.Intent, Snapshot: snap})
-	if err != nil {
-		writeError(w, http.StatusBadGateway, "proposer_failed", err.Error())
-		return
-	}
-
-	// 5. Decode the proposal JSON for response shaping.
-	var proposalDoc map[string]any
-	if err := json.Unmarshal(res.ProposalRaw, &proposalDoc); err != nil {
-		writeError(w, http.StatusInternalServerError, "proposal_decode", err.Error())
-		return
-	}
-
-	// 6 & 7. Build runnable (validates against schema, decodes typed
-	// proposal, prepares per-action closures), then evaluate policy.
-	rb, err := runner.Build(res.ProposalRaw)
-	if err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "proposal_invalid", err.Error())
-		return
-	}
-	engine, err := policy.NewEngine(ctx)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "policy_engine", err.Error())
-		return
-	}
-	verdict, polErr := rb.EvaluatePolicy(ctx, engine)
-	if polErr != nil {
-		writeError(w, http.StatusInternalServerError, "policy_failed", polErr.Error())
-		return
-	}
-
-	// 8. Persist + return.
+	// 3. Build batch + proposal records.
+	batchID := "batch_" + randID()
 	now := time.Now().UTC()
-	rec := &proposalRecord{
-		ID:           "prop_" + randID(),
-		Intent:       req.Intent,
-		ActionType:   routing.ActionType,
-		ResourceType: spec.Resource,
-		Target:       instance,
-		Region:       region,
-		ProposalHash: string(res.ProposalHash),
-		Proposal:     proposalDoc,
-		Snapshot:     snapshotToMap(snap),
-		Policy: proposalPolicy{
-			Decision: string(verdict.Decision),
-			Reason:   verdict.Reason,
-		},
-		Router: proposalRouter{
-			Model:      "router",
-			Confidence: routing.Confidence,
-			Reasoning:  routing.Reasoning,
-		},
-		Proposer: proposalMeta{
-			Model:        res.Model,
-			InputTokens:  res.InputTokens,
-			OutputTokens: res.OutputTokens,
-			CostUSD:      res.CostUSD,
-			DurationMs:   res.Duration.Milliseconds(),
-			RunID:        res.RunID,
-		},
-		Status:        statusForVerdict(verdict),
-		ProposalBytes: append([]byte(nil), res.ProposalRaw...),
-		CreatedAt:     now,
+	proposals := make([]*proposalRecord, len(results))
+
+	for i, ar := range results {
+		spec, _ := action.Lookup(ar.routing.ActionType)
+		rec := &proposalRecord{
+			ID:             "prop_" + randID(),
+			BatchID:        batchID,
+			ExecutionOrder: batchRouting.ExecutionOrder,
+			Intent:         req.Intent,
+			ActionType:   ar.routing.ActionType,
+			ResourceType: spec.Resource,
+			Target:       ar.routing.DBInstanceIdentifier,
+			Region:       ar.routing.Region,
+			ProposalHash: string(ar.res.ProposalHash),
+			Proposal:     ar.proposalDoc,
+			Snapshot:     snapshotToMap(ar.snap),
+			Policy: proposalPolicy{
+				Decision: string(ar.verdict.Decision),
+				Reason:   ar.verdict.Reason,
+			},
+			Router: proposalRouter{
+				Model:      "router",
+				Confidence: ar.routing.Confidence,
+				Reasoning:  batchRouting.Reasoning,
+			},
+			Proposer: proposalMeta{
+				Model:        ar.res.Model,
+				InputTokens:  ar.res.InputTokens,
+				OutputTokens: ar.res.OutputTokens,
+				CostUSD:      ar.res.CostUSD,
+				DurationMs:   ar.res.Duration.Milliseconds(),
+				RunID:        ar.res.RunID,
+			},
+			Status:        statusForVerdict(ar.verdict),
+			ProposalBytes: append([]byte(nil), ar.res.ProposalRaw...),
+			CreatedAt:     now.Add(time.Duration(i) * time.Microsecond), // preserve order
+		}
+		s.deps.Proposals().put(rec)
+		proposals[i] = rec
 	}
-	s.deps.Proposals().put(rec)
-	writeJSON(w, http.StatusCreated, rec)
+
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"batch_id":        batchID,
+		"execution_order": batchRouting.ExecutionOrder,
+		"proposals":       proposals,
+	})
 }
 
 func (s *Server) handleListProposals(w http.ResponseWriter, r *http.Request) {
@@ -242,9 +296,6 @@ func (s *Server) handleGetProposal(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, p)
 }
 
-// statusForVerdict maps the policy decision to the proposal's lifecycle
-// status: "allow" auto-allows, "needs_approval" stays pending, "deny"
-// is terminal.
 func statusForVerdict(v policy.Verdict) string {
 	switch v.Decision {
 	case policy.DecisionAllow:
@@ -256,9 +307,6 @@ func statusForVerdict(v policy.Verdict) string {
 	}
 }
 
-// snapshotToMap renders the typed snapshot via JSON round-trip so the
-// response embeds it as a generic object — easier for the dashboard
-// than mirroring the Go struct shape.
 func snapshotToMap(s proposer.Snapshot) map[string]any {
 	b, _ := json.Marshal(s)
 	var m map[string]any
@@ -270,4 +318,10 @@ func randID() string {
 	var b [12]byte
 	_, _ = rand.Read(b[:])
 	return hex.EncodeToString(b[:])
+}
+
+// writeErrorVal returns an error value (used inside goroutines where we
+// can't call writeError directly on the ResponseWriter).
+func writeErrorVal(code, msg string) error {
+	return fmt.Errorf("%s: %s", code, msg)
 }

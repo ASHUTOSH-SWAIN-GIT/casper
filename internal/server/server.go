@@ -74,6 +74,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /v1/proposals/{id}/approve", s.handleApproveProposal)
 	s.mux.HandleFunc("POST /v1/proposals/{id}/reject", s.handleRejectProposal)
 
+	// Batches (multi-action proposal groups).
+	s.mux.HandleFunc("POST /v1/batches/{batch_id}/approve", s.handleApproveBatch)
+	s.mux.HandleFunc("POST /v1/batches/{batch_id}/reject", s.handleRejectBatch)
+
 	// Runs (execution records + live SSE event stream).
 	s.mux.HandleFunc("GET /v1/runs", s.handleListRuns)
 	s.mux.HandleFunc("GET /v1/runs/{id}", s.handleGetRun)

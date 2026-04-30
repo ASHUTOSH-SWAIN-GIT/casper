@@ -165,10 +165,14 @@ func runProposeNL(ctx context.Context, cfg llmCfg, starLog eventlog.EventLog) er
 	if err != nil {
 		return fmt.Errorf("build router: %w", err)
 	}
-	routing, err := router.Route(ctx, proposeIntent)
+	batchRouting, err := router.Route(ctx, proposeIntent)
 	if err != nil {
 		return fmt.Errorf("route intent: %w", err)
 	}
+	if len(batchRouting.Actions) == 0 {
+		return fmt.Errorf("router returned no actions")
+	}
+	routing := batchRouting.Actions[0]
 	fmt.Fprintf(os.Stderr, "router: action=%s instance=%s confidence=%s reasoning=%s\n",
 		routing.ActionType, routing.DBInstanceIdentifier, routing.Confidence, routing.Reasoning)
 

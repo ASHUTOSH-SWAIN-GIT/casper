@@ -16,59 +16,51 @@ import (
 )
 
 // DefaultRouterModel is the Anthropic-API model used for NL routing.
-// Haiku is ~5x cheaper than Sonnet and the routing task is simple
-// enough that the extra capability of larger models doesn't justify
-// the cost. When Backend=BackendBedrock, the model is required (no
-// default — see Config docs in proposer.go).
 const DefaultRouterModel = "claude-haiku-4-5"
 
-// Routing is what the router emits.
+// Routing is the per-action result from the router.
 type Routing struct {
-	ActionType         string `json:"action_type"`
+	ActionType           string `json:"action_type"`
 	DBInstanceIdentifier string `json:"db_instance_identifier"`
-	Region             string `json:"region,omitempty"`
-	Confidence         string `json:"confidence,omitempty"` // "high" | "medium" | "low"
-	Reasoning          string `json:"reasoning,omitempty"`
+	Region               string `json:"region,omitempty"`
+	Confidence           string `json:"confidence,omitempty"` // "high" | "medium" | "low"
+	Reasoning            string `json:"reasoning,omitempty"`
 }
 
-// Router classifies a free-form intent into a Casper action type plus
-// the named resource. It is a tiny single-tool single-turn agent —
-// same architecture as the per-action proposer, just smaller.
+// BatchRouting is what the router returns — one or more actions with an
+// execution order hint.
+type BatchRouting struct {
+	Actions        []Routing `json:"actions"`
+	ExecutionOrder string    `json:"execution_order"` // "sequential" | "parallel"
+	Reasoning      string    `json:"reasoning,omitempty"`
+}
+
+// Router classifies a free-form intent into one or more Casper action
+// types plus named resources and an execution order.
 type Router struct {
-	agent      *starling.Agent
-	captured   *routerCapture
+	agent    *starling.Agent
+	captured *routerCapture
 }
 
 type routerCapture struct {
-	out *Routing
+	out *BatchRouting
 }
 
-func (c *routerCapture) reset()                    { c.out = nil }
-func (c *routerCapture) set(r Routing)             { c.out = &r }
-func (c *routerCapture) get() *Routing             { return c.out }
+func (c *routerCapture) reset()               { c.out = nil }
+func (c *routerCapture) set(r BatchRouting)   { c.out = &r }
+func (c *routerCapture) get() *BatchRouting   { return c.out }
 
 // RouterConfig configures a Router.
 type RouterConfig struct {
-	// Backend picks the LLM service. Defaults to BackendAnthropic.
 	Backend Backend
-
-	// APIKey is required when Backend=BackendAnthropic.
-	APIKey string
-
-	// Region is used when Backend=BackendBedrock.
-	Region string
-
-	// Model is the model identifier. Required when Backend=BackendBedrock.
-	// Optional for Anthropic — defaults to DefaultRouterModel.
-	Model string
-
-	Log     eventlog.EventLog // required — Starling's run log
-	Timeout time.Duration     // optional, defaults to 20s
+	APIKey  string
+	Region  string
+	Model   string
+	Log     eventlog.EventLog
+	Timeout time.Duration
 }
 
-// NewRouter constructs a Router. The router holds its own Starling
-// agent — separate from the per-action proposer — because its prompt,
-// tool, and model differ.
+// NewRouter constructs a Router.
 func NewRouter(c RouterConfig) (*Router, error) {
 	if c.Log == nil {
 		return nil, errors.New("Log is required")
@@ -78,9 +70,6 @@ func NewRouter(c RouterConfig) (*Router, error) {
 		ttl = 20 * time.Second
 	}
 
-	// Reuse the proposer's provider builder by wrapping the router
-	// config in a Config; the only differences (model default, budget,
-	// system prompt) are applied here.
 	asProposerConfig := Config{
 		Backend: c.Backend,
 		APIKey:  c.APIKey,
@@ -106,17 +95,18 @@ func NewRouter(c RouterConfig) (*Router, error) {
 			MaxTurns:     2,
 		},
 		Budget: &starling.Budget{
-			MaxInputTokens:  4_000,
-			MaxOutputTokens: 1_000,
-			MaxUSD:          0.01, // routing should be cheap
+			MaxInputTokens:  5_000,
+			MaxOutputTokens: 1_500,
+			MaxUSD:          0.02,
 			MaxWallClock:    ttl,
 		},
 	}
 	return &Router{agent: a, captured: cap}, nil
 }
 
-// Route classifies a free-form intent.
-func (r *Router) Route(ctx context.Context, intent string) (*Routing, error) {
+// Route classifies a free-form intent and returns a BatchRouting. For
+// single-action intents the batch will contain exactly one Routing.
+func (r *Router) Route(ctx context.Context, intent string) (*BatchRouting, error) {
 	if strings.TrimSpace(intent) == "" {
 		return nil, errors.New("intent is empty")
 	}
@@ -131,49 +121,68 @@ func (r *Router) Route(ctx context.Context, intent string) (*Routing, error) {
 	return nil, errors.New("router did not classify the intent")
 }
 
-// classifyInput is the schema the router's classify tool accepts.
-type classifyInput struct {
-	ActionType           string `json:"action_type" jsonschema:"description=The Casper action type that best fits the operator's intent. Must be one of the registered action types."`
-	DBInstanceIdentifier string `json:"db_instance_identifier" jsonschema:"description=The RDS database instance identifier the action targets, extracted from the intent."`
-	Region               string `json:"region,omitempty" jsonschema:"description=Optional AWS region if the operator named one explicitly."`
+// classifyBatchInput is the schema the classify_actions tool accepts.
+type classifyBatchInput struct {
+	Actions []classifyItem `json:"actions" jsonschema:"description=One or more actions required to satisfy the operator's intent. Most intents require exactly one action."`
+	ExecutionOrder string `json:"execution_order" jsonschema:"description=How to run multiple actions: 'sequential' (one after another; stop if one fails) or 'parallel' (all at once). Use 'sequential' when order matters (e.g. snapshot before resize). Ignored for single-action intents."`
+	Reasoning string `json:"reasoning,omitempty" jsonschema:"description=Short rationale for the action choices and execution order."`
+}
+
+type classifyItem struct {
+	ActionType           string `json:"action_type" jsonschema:"description=The Casper action type that best fits this part of the intent."`
+	DBInstanceIdentifier string `json:"db_instance_identifier" jsonschema:"description=The RDS instance identifier this action targets."`
+	Region               string `json:"region,omitempty" jsonschema:"description=AWS region if named explicitly in the intent."`
 	Confidence           string `json:"confidence,omitempty" jsonschema:"description=One of: high, medium, low."`
-	Reasoning            string `json:"reasoning,omitempty" jsonschema:"description=Short rationale for the action choice."`
 }
 
 func buildClassifyTool(c *routerCapture) tool.Tool {
 	return tool.Typed(
-		"classify_action",
-		"Classify a free-form operator intent into a Casper action type plus the named resource. Call this exactly once.",
-		func(ctx context.Context, in classifyInput) (map[string]any, error) {
-			if _, ok := action.Lookup(in.ActionType); !ok {
-				return nil, fmt.Errorf("unknown action_type %q", in.ActionType)
+		"classify_actions",
+		"Classify a free-form operator intent into one or more Casper action types plus named resources. Call this exactly once.",
+		func(ctx context.Context, in classifyBatchInput) (map[string]any, error) {
+			if len(in.Actions) == 0 {
+				return nil, errors.New("actions must have at least one item")
 			}
-			if in.DBInstanceIdentifier == "" {
-				return nil, errors.New("db_instance_identifier is required")
+			routings := make([]Routing, 0, len(in.Actions))
+			for _, item := range in.Actions {
+				if _, ok := action.Lookup(item.ActionType); !ok {
+					return nil, fmt.Errorf("unknown action_type %q", item.ActionType)
+				}
+				if item.DBInstanceIdentifier == "" {
+					return nil, errors.New("db_instance_identifier is required for each action")
+				}
+				routings = append(routings, Routing{
+					ActionType:           item.ActionType,
+					DBInstanceIdentifier: item.DBInstanceIdentifier,
+					Region:               item.Region,
+					Confidence:           item.Confidence,
+					Reasoning:            in.Reasoning,
+				})
 			}
-			c.set(Routing{
-				ActionType:           in.ActionType,
-				DBInstanceIdentifier: in.DBInstanceIdentifier,
-				Region:               in.Region,
-				Confidence:           in.Confidence,
-				Reasoning:            in.Reasoning,
+			order := in.ExecutionOrder
+			if order != "parallel" {
+				order = "sequential" // default to sequential for safety
+			}
+			c.set(BatchRouting{
+				Actions:        routings,
+				ExecutionOrder: order,
+				Reasoning:      in.Reasoning,
 			})
-			return map[string]any{"ok": true}, nil
+			return map[string]any{"ok": true, "action_count": len(routings)}, nil
 		},
 	)
 }
 
-// routerSystemPrompt is built dynamically from the action registry so
-// adding a new action automatically informs the router.
 func routerSystemPrompt() string {
 	var b strings.Builder
 	b.WriteString(`You are Casper's intent router.
 
-Your only job is to classify a free-form operator intent into one of the registered Casper action types and to extract the named target resource (the RDS instance identifier).
+Your job is to classify a free-form operator intent into one or more Casper action types and extract the named target resource(s).
 
 Hard constraints:
-- You must call classify_action exactly ONCE.
-- You must not write any free-form text, explanation, or commentary outside the tool call. Reasoning belongs in the "reasoning" field.
+- You must call classify_actions exactly ONCE.
+- You must not write any free-form text outside the tool call. Reasoning belongs in the "reasoning" field.
+- Most intents require exactly one action. Only emit multiple actions if the intent clearly asks for more than one distinct operation.
 
 Available action types:
 `)
@@ -183,22 +192,44 @@ Available action types:
 	}
 	b.WriteString(`
 Disambiguation hints:
-- "scale up", "scale down", "resize", "more CPU", "more headroom", "underprovisioned", "overprovisioned" → rds_resize
-- "snapshot", "backup once", "take a snapshot", "create a snapshot" → rds_create_snapshot
-- "backup retention", "keep backups for", "retention period" → rds_modify_backup_retention
+- "scale up/down", "resize", "more CPU", "headroom" → rds_resize
+- "snapshot", "backup once", "take a snapshot" → rds_create_snapshot
+- "backup retention", "keep backups for" → rds_modify_backup_retention
 - If the intent doesn't clearly fit any action, pick the closest match and set confidence to "low".
 
-Always extract the RDS database instance identifier from the intent — operators usually name it directly ("orders-prod", "casper-test", etc.).`)
+Multi-action hints:
+- "snapshot AND resize X" → two actions: rds_create_snapshot + rds_resize, execution_order: "sequential"
+- "resize X and Y simultaneously" → two rds_resize actions, execution_order: "parallel"
+- "snapshot X before resizing it" → sequential (snapshot first, then resize)
+- Default execution_order to "sequential" unless the operator explicitly asks for parallel/simultaneous.
 
-	jsonSampleOut, _ := json.MarshalIndent(map[string]any{
-		"action_type":            "rds_resize",
-		"db_instance_identifier": "orders-prod",
-		"region":                 "us-east-1",
-		"confidence":             "high",
-		"reasoning":              "Operator says CPU is sustained at 90%; that's a resize-up scenario.",
+Always extract the RDS instance identifier from the intent.`)
+
+	jsonSampleSingle, _ := json.MarshalIndent(map[string]any{
+		"actions": []any{map[string]any{
+			"action_type":            "rds_resize",
+			"db_instance_identifier": "orders-prod",
+			"region":                 "us-east-1",
+			"confidence":             "high",
+		}},
+		"execution_order": "sequential",
+		"reasoning":       "Operator says CPU is sustained at 90%; that's a resize-up scenario.",
 	}, "", "  ")
-	b.WriteString("\n\nExample classify_action input for the intent \"orders-prod is at 90% CPU\":\n```json\n")
-	b.Write(jsonSampleOut)
+	b.WriteString("\n\nExample classify_actions input for \"orders-prod is at 90% CPU\":\n```json\n")
+	b.Write(jsonSampleSingle)
 	b.WriteString("\n```")
+
+	jsonSampleMulti, _ := json.MarshalIndent(map[string]any{
+		"actions": []any{
+			map[string]any{"action_type": "rds_create_snapshot", "db_instance_identifier": "orders-prod", "confidence": "high"},
+			map[string]any{"action_type": "rds_resize", "db_instance_identifier": "orders-prod", "confidence": "high"},
+		},
+		"execution_order": "sequential",
+		"reasoning":       "Operator wants a safety snapshot before resizing; sequential is correct.",
+	}, "", "  ")
+	b.WriteString("\n\nExample for \"snapshot orders-prod then resize it\":\n```json\n")
+	b.Write(jsonSampleMulti)
+	b.WriteString("\n```")
+
 	return b.String()
 }

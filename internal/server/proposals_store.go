@@ -9,8 +9,10 @@ import (
 // is JSON-tagged for direct response use; internal-only fields stay
 // untagged.
 type proposalRecord struct {
-	ID            string         `json:"id"`
-	Intent        string         `json:"intent"`
+	ID             string         `json:"id"`
+	BatchID        string         `json:"batch_id,omitempty"`
+	ExecutionOrder string         `json:"execution_order,omitempty"` // "sequential" | "parallel"
+	Intent         string         `json:"intent"`
 	ActionType    string         `json:"action_type"`
 	ResourceType  string         `json:"resource_type"`
 	Target        string         `json:"target"`
@@ -90,6 +92,24 @@ func (s *proposalsStore) update(id string, fn func(*proposalRecord)) {
 
 // list returns proposals sorted newest-first, optionally filtered by
 // status. Empty status string means "all".
+func (s *proposalsStore) listByBatch(batchID string) []*proposalRecord {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []*proposalRecord
+	for _, p := range s.m {
+		if p.BatchID == batchID {
+			out = append(out, p)
+		}
+	}
+	// sort by creation order
+	for i := 1; i < len(out); i++ {
+		for j := i; j > 0 && out[j].CreatedAt.Before(out[j-1].CreatedAt); j-- {
+			out[j], out[j-1] = out[j-1], out[j]
+		}
+	}
+	return out
+}
+
 func (s *proposalsStore) list(status string) []*proposalRecord {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
