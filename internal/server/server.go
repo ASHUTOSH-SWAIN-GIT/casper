@@ -23,6 +23,15 @@ import (
 // kept narrow on purpose.
 type Options struct {
 	Addr string
+	Deps Dependencies
+}
+
+// Dependencies are the runtime collaborators the handlers need. Pulled
+// behind an interface so tests can swap in stubs and so main.go is the
+// only place the full graph is wired.
+type Dependencies interface {
+	LLMConfig() (llmConfig, error)
+	Proposals() *proposalsStore
 }
 
 // Server is the casperd HTTP application. Construct with New, mount
@@ -30,12 +39,13 @@ type Options struct {
 type Server struct {
 	opts Options
 	mux  *http.ServeMux
+	deps Dependencies
 }
 
 // New constructs a Server with all routes registered. Dependencies that
 // require config (LLM keys, audit store) are wired here as we add them.
 func New(opts Options) *Server {
-	s := &Server{opts: opts, mux: http.NewServeMux()}
+	s := &Server{opts: opts, mux: http.NewServeMux(), deps: opts.Deps}
 	s.routes()
 	return s
 }
@@ -51,6 +61,11 @@ func (s *Server) routes() {
 	// Action catalog (read-only, derived from the action registry).
 	s.mux.HandleFunc("GET /v1/actions", s.handleListActions)
 	s.mux.HandleFunc("GET /v1/actions/{type}", s.handleGetAction)
+
+	// Proposals (router + fetcher + proposer pipeline; persistence in-memory).
+	s.mux.HandleFunc("POST /v1/proposals", s.handleCreateProposal)
+	s.mux.HandleFunc("GET /v1/proposals", s.handleListProposals)
+	s.mux.HandleFunc("GET /v1/proposals/{id}", s.handleGetProposal)
 }
 
 // withMiddleware wraps the mux with cross-cutting concerns:

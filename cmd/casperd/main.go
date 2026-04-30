@@ -27,6 +27,7 @@ func main() {
 
 	srv := server.New(server.Options{
 		Addr: addr,
+		Deps: server.NewRuntimeDeps(),
 	})
 
 	httpSrv := &http.Server{

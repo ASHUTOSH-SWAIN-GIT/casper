@@ -6,11 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/jerkeyray/starling/eventlog"
 	"github.com/spf13/cobra"
 
+	"github.com/ASHUTOSH-SWAIN-GIT/casper/internal/llmcfg"
 	"github.com/ASHUTOSH-SWAIN-GIT/casper/internal/proposer"
 )
 
@@ -115,56 +115,15 @@ func runPropose(cmd *cobra.Command, args []string) error {
 	return runProposeFile(ctx, cfg, starLog, args[0])
 }
 
-// llmCfg bundles the env-derived backend, credentials, region, and
-// per-role model overrides for the proposer + router.
-type llmCfg struct {
-	Backend       proposer.Backend
-	APIKey        string
-	Region        string
-	ProposerModel string // optional; "" means "use the proposer's default"
-	RouterModel   string // optional; "" means "use the router's default"
-}
+// llmCfg is an alias of llmcfg.Config kept so the rest of the CLI's
+// internal helpers don't need to change names.
+type llmCfg = llmcfg.Config
 
-// llmConfigFromEnv reads CASPER_LLM_BACKEND and the appropriate
-// credentials/model overrides from the environment. Defaults to the
-// Anthropic-API path; switching to Bedrock requires CASPER_LLM_BACKEND=bedrock
-// plus AWS credentials in the standard SDK chain.
+// llmConfigFromEnv defers to llmcfg.FromEnv. The CLI and casperd share
+// the same env-derived configuration so behavior is consistent across
+// both surfaces.
 func llmConfigFromEnv() (llmCfg, error) {
-	backendStr := strings.ToLower(strings.TrimSpace(os.Getenv("CASPER_LLM_BACKEND")))
-	switch backendStr {
-	case "", "anthropic":
-		key := os.Getenv("ANTHROPIC_API_KEY")
-		if key == "" {
-			return llmCfg{}, fmt.Errorf("ANTHROPIC_API_KEY is required (or set CASPER_LLM_BACKEND=bedrock)")
-		}
-		return llmCfg{
-			Backend:       proposer.BackendAnthropic,
-			APIKey:        key,
-			ProposerModel: os.Getenv("CASPER_PROPOSER_MODEL"),
-			RouterModel:   os.Getenv("CASPER_ROUTER_MODEL"),
-		}, nil
-	case "bedrock":
-		region := os.Getenv("AWS_REGION")
-		if region == "" {
-			region = os.Getenv("AWS_DEFAULT_REGION")
-		}
-		propModel := os.Getenv("CASPER_BEDROCK_PROPOSER_MODEL")
-		routerModel := os.Getenv("CASPER_BEDROCK_ROUTER_MODEL")
-		if propModel == "" || routerModel == "" {
-			return llmCfg{}, fmt.Errorf(
-				"CASPER_BEDROCK_PROPOSER_MODEL and CASPER_BEDROCK_ROUTER_MODEL are required when CASPER_LLM_BACKEND=bedrock\n" +
-					"  (Bedrock IDs are version-pinned and account-specific — set them to the inference profile IDs you have access to,\n" +
-					"   e.g. \"us.anthropic.claude-sonnet-4-5-20250929-v1:0\" / \"us.anthropic.claude-haiku-4-5-20251001-v1:0\")")
-		}
-		return llmCfg{
-			Backend:       proposer.BackendBedrock,
-			Region:        region,
-			ProposerModel: propModel,
-			RouterModel:   routerModel,
-		}, nil
-	default:
-		return llmCfg{}, fmt.Errorf("unknown CASPER_LLM_BACKEND=%q (expected \"anthropic\" or \"bedrock\")", backendStr)
-	}
+	return llmcfg.FromEnv()
 }
 
 // runProposeFile is the legacy file-based path: reads { intent, snapshot }
