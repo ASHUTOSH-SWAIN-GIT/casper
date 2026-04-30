@@ -8,6 +8,7 @@ import (
 
 	"github.com/ASHUTOSH-SWAIN-GIT/casper/internal/action"
 	"github.com/ASHUTOSH-SWAIN-GIT/casper/internal/audit"
+	"github.com/ASHUTOSH-SWAIN-GIT/casper/internal/runner"
 )
 
 // readProposal reads raw JSON from disk for any subcommand that takes
@@ -41,80 +42,12 @@ func decodeProposal(raw []byte) (action.RDSResizeProposal, action.ProposalHash, 
 	return p, h, nil
 }
 
-// detectActionType picks the action type from a proposal's shape.
-// Today proposals don't carry an explicit action_type field, so we
-// detect by which unique field is present. If/when proposals start
-// carrying an explicit action_type, we honor that first.
-//
-// Adding a new action: add a case here. Failing to detect returns an
-// error — better than silently routing to the wrong action.
-func detectActionType(raw []byte) (string, error) {
-	var probe map[string]any
-	if err := json.Unmarshal(raw, &probe); err != nil {
-		return "", fmt.Errorf("parse proposal: %w", err)
-	}
-	if v, ok := probe["action_type"].(string); ok && v != "" {
-		return v, nil // explicit field wins (forward-compat)
-	}
-	switch {
-	// rds_restore_from_snapshot is checked first: it shares
-	// snapshot_identifier with create/delete-snapshot AND
-	// target_instance_class with rds_resize, so the most specific
-	// case (both fields together) must come before the others.
-	case probe["snapshot_identifier"] != nil && probe["target_db_instance_identifier"] != nil:
-		return "rds_restore_from_snapshot", nil
-	case probe["target_instance_class"] != nil && probe["snapshot_identifier"] == nil:
-		return "rds_resize", nil
-	// rds_delete_snapshot must be checked before rds_create_snapshot:
-	// both carry snapshot_identifier; only create_snapshot also carries
-	// db_instance_identifier (the source instance the snapshot is taken from).
-	case probe["snapshot_identifier"] != nil && probe["db_instance_identifier"] == nil:
-		return "rds_delete_snapshot", nil
-	case probe["snapshot_identifier"] != nil:
-		return "rds_create_snapshot", nil
-	case probe["target_retention_days"] != nil:
-		return "rds_modify_backup_retention", nil
-	case probe["force_failover"] != nil:
-		return "rds_reboot_instance", nil
-	case probe["target_multi_az"] != nil:
-		return "rds_modify_multi_az", nil
-	case probe["target_allocated_storage_gb"] != nil:
-		return "rds_storage_grow", nil
-	case probe["replica_db_instance_identifier"] != nil:
-		return "rds_create_read_replica", nil
-	case probe["target_engine_version"] != nil:
-		return "rds_modify_engine_version", nil
-	}
-	return "", fmt.Errorf("could not detect action type from proposal shape (no recognizable discriminator field)")
-}
-
-// validateForActionType dispatches to the correct schema validator
-// based on the detected action type.
-func validateForActionType(raw []byte, actionType string) error {
-	switch actionType {
-	case "rds_resize":
-		return action.Validate(raw)
-	case "rds_create_snapshot":
-		return action.ValidateRDSCreateSnapshot(raw)
-	case "rds_modify_backup_retention":
-		return action.ValidateRDSModifyBackupRetention(raw)
-	case "rds_reboot_instance":
-		return action.ValidateRDSRebootInstance(raw)
-	case "rds_modify_multi_az":
-		return action.ValidateRDSModifyMultiAZ(raw)
-	case "rds_storage_grow":
-		return action.ValidateRDSStorageGrow(raw)
-	case "rds_delete_snapshot":
-		return action.ValidateRDSDeleteSnapshot(raw)
-	case "rds_create_read_replica":
-		return action.ValidateRDSCreateReadReplica(raw)
-	case "rds_modify_engine_version":
-		return action.ValidateRDSModifyEngineVersion(raw)
-	case "rds_restore_from_snapshot":
-		return action.ValidateRDSRestoreFromSnapshot(raw)
-	default:
-		return fmt.Errorf("no validator registered for action type %q", actionType)
-	}
+// detectActionType and validateForActionType now live in
+// internal/runner — both the CLI and casperd consume them via that
+// package. The CLI keeps thin aliases here so call sites don't churn.
+func detectActionType(raw []byte) (string, error) { return runner.DetectActionType(raw) }
+func validateForActionType(raw []byte, t string) error {
+	return runner.ValidateForActionType(raw, t)
 }
 
 // openAuditStore picks an audit.Store based on flags + env. forceMemory

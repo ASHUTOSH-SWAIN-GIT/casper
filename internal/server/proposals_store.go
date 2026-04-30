@@ -26,6 +26,11 @@ type proposalRecord struct {
 	RunID         string         `json:"run_id,omitempty"`
 	CreatedAt     time.Time      `json:"created_at"`
 	DecidedAt     *time.Time     `json:"decided_at,omitempty"`
+
+	// ProposalBytes is the canonical proposal JSON used to compute the
+	// hash and rebuild a runner.Runnable at execution time. Not exposed
+	// on the wire — the decoded Proposal map is enough for clients.
+	ProposalBytes []byte `json:"-"`
 }
 
 type proposalPolicy struct {
@@ -71,6 +76,16 @@ func (s *proposalsStore) get(id string) (*proposalRecord, bool) {
 	defer s.mu.RUnlock()
 	p, ok := s.m[id]
 	return p, ok
+}
+
+// update applies fn to the proposal record under write lock. No-op if
+// the id is unknown.
+func (s *proposalsStore) update(id string, fn func(*proposalRecord)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if p, ok := s.m[id]; ok {
+		fn(p)
+	}
 }
 
 // list returns proposals sorted newest-first, optionally filtered by

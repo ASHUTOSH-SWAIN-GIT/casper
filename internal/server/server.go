@@ -16,6 +16,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"time"
+
+	"github.com/ASHUTOSH-SWAIN-GIT/casper/internal/audit"
 )
 
 // Options configures Server. Fields here will grow as we wire dependencies
@@ -32,6 +34,9 @@ type Options struct {
 type Dependencies interface {
 	LLMConfig() (llmConfig, error)
 	Proposals() *proposalsStore
+	Runs() *runsStore
+	Bus() *runEventBus
+	Audit() audit.Store
 }
 
 // Server is the casperd HTTP application. Construct with New, mount
@@ -66,6 +71,20 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /v1/proposals", s.handleCreateProposal)
 	s.mux.HandleFunc("GET /v1/proposals", s.handleListProposals)
 	s.mux.HandleFunc("GET /v1/proposals/{id}", s.handleGetProposal)
+	s.mux.HandleFunc("POST /v1/proposals/{id}/approve", s.handleApproveProposal)
+	s.mux.HandleFunc("POST /v1/proposals/{id}/reject", s.handleRejectProposal)
+
+	// Runs (execution records + live SSE event stream).
+	s.mux.HandleFunc("GET /v1/runs", s.handleListRuns)
+	s.mux.HandleFunc("GET /v1/runs/{id}", s.handleGetRun)
+	s.mux.HandleFunc("GET /v1/runs/{id}/events", s.handleRunEvents)
+
+	// Audit (chain inspection + verification).
+	s.mux.HandleFunc("GET /v1/audit", s.handleListAudit)
+	s.mux.HandleFunc("POST /v1/audit/verify", s.handleVerifyAudit)
+
+	// Workspace (read-only environment summary for the dashboard topbar).
+	s.mux.HandleFunc("GET /v1/workspace", s.handleGetWorkspace)
 }
 
 // withMiddleware wraps the mux with cross-cutting concerns:

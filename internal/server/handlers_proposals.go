@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"os"
 	"strings"
@@ -18,6 +17,7 @@ import (
 	"github.com/ASHUTOSH-SWAIN-GIT/casper/internal/awsx"
 	"github.com/ASHUTOSH-SWAIN-GIT/casper/internal/policy"
 	"github.com/ASHUTOSH-SWAIN-GIT/casper/internal/proposer"
+	"github.com/ASHUTOSH-SWAIN-GIT/casper/internal/runner"
 	"github.com/ASHUTOSH-SWAIN-GIT/casper/internal/snapshot"
 )
 
@@ -158,14 +158,19 @@ func (s *Server) handleCreateProposal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 6. Validate against the action's JSON Schema before policy.
-	if err := validateForActionType(res.ProposalRaw, routing.ActionType); err != nil {
+	// 6 & 7. Build runnable (validates against schema, decodes typed
+	// proposal, prepares per-action closures), then evaluate policy.
+	rb, err := runner.Build(res.ProposalRaw)
+	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, "proposal_invalid", err.Error())
 		return
 	}
-
-	// 7. Policy gate.
-	verdict, polErr := s.evaluatePolicy(ctx, routing.ActionType, res.ProposalRaw)
+	engine, err := policy.NewEngine(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "policy_engine", err.Error())
+		return
+	}
+	verdict, polErr := rb.EvaluatePolicy(ctx, engine)
 	if polErr != nil {
 		writeError(w, http.StatusInternalServerError, "policy_failed", polErr.Error())
 		return
@@ -200,8 +205,9 @@ func (s *Server) handleCreateProposal(w http.ResponseWriter, r *http.Request) {
 			DurationMs:   res.Duration.Milliseconds(),
 			RunID:        res.RunID,
 		},
-		Status:    statusForVerdict(verdict),
-		CreatedAt: now,
+		Status:        statusForVerdict(verdict),
+		ProposalBytes: append([]byte(nil), res.ProposalRaw...),
+		CreatedAt:     now,
 	}
 	s.deps.Proposals().put(rec)
 	writeJSON(w, http.StatusCreated, rec)
@@ -234,107 +240,6 @@ func (s *Server) handleGetProposal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, p)
-}
-
-// evaluatePolicy runs the embedded Rego rules for the action type
-// against the proposal JSON. Decoding the typed struct happens once
-// per action — keep this in sync with cmd/casperctl/runnable.go's
-// dispatch.
-func (s *Server) evaluatePolicy(ctx context.Context, actionType string, raw []byte) (policy.Verdict, error) {
-	engine, err := policy.NewEngine(ctx)
-	if err != nil {
-		return policy.Verdict{}, err
-	}
-	switch actionType {
-	case "rds_resize":
-		var p action.RDSResizeProposal
-		if err := json.Unmarshal(raw, &p); err != nil {
-			return policy.Verdict{}, err
-		}
-		return engine.EvaluateRDSResize(ctx, p)
-	case "rds_create_snapshot":
-		var p action.RDSCreateSnapshotProposal
-		if err := json.Unmarshal(raw, &p); err != nil {
-			return policy.Verdict{}, err
-		}
-		return engine.EvaluateRDSCreateSnapshot(ctx, p)
-	case "rds_modify_backup_retention":
-		var p action.RDSModifyBackupRetentionProposal
-		if err := json.Unmarshal(raw, &p); err != nil {
-			return policy.Verdict{}, err
-		}
-		return engine.EvaluateRDSModifyBackupRetention(ctx, p)
-	case "rds_reboot_instance":
-		var p action.RDSRebootInstanceProposal
-		if err := json.Unmarshal(raw, &p); err != nil {
-			return policy.Verdict{}, err
-		}
-		return engine.EvaluateRDSRebootInstance(ctx, p)
-	case "rds_modify_multi_az":
-		var p action.RDSModifyMultiAZProposal
-		if err := json.Unmarshal(raw, &p); err != nil {
-			return policy.Verdict{}, err
-		}
-		return engine.EvaluateRDSModifyMultiAZ(ctx, p)
-	case "rds_storage_grow":
-		var p action.RDSStorageGrowProposal
-		if err := json.Unmarshal(raw, &p); err != nil {
-			return policy.Verdict{}, err
-		}
-		return engine.EvaluateRDSStorageGrow(ctx, p)
-	case "rds_delete_snapshot":
-		var p action.RDSDeleteSnapshotProposal
-		if err := json.Unmarshal(raw, &p); err != nil {
-			return policy.Verdict{}, err
-		}
-		return engine.EvaluateRDSDeleteSnapshot(ctx, p)
-	case "rds_create_read_replica":
-		var p action.RDSCreateReadReplicaProposal
-		if err := json.Unmarshal(raw, &p); err != nil {
-			return policy.Verdict{}, err
-		}
-		return engine.EvaluateRDSCreateReadReplica(ctx, p)
-	case "rds_modify_engine_version":
-		var p action.RDSModifyEngineVersionProposal
-		if err := json.Unmarshal(raw, &p); err != nil {
-			return policy.Verdict{}, err
-		}
-		return engine.EvaluateRDSModifyEngineVersion(ctx, p)
-	case "rds_restore_from_snapshot":
-		var p action.RDSRestoreFromSnapshotProposal
-		if err := json.Unmarshal(raw, &p); err != nil {
-			return policy.Verdict{}, err
-		}
-		return engine.EvaluateRDSRestoreFromSnapshot(ctx, p)
-	}
-	return policy.Verdict{}, fmt.Errorf("no policy evaluator wired for %q", actionType)
-}
-
-// validateForActionType dispatches to the per-action JSON Schema validator.
-func validateForActionType(raw []byte, actionType string) error {
-	switch actionType {
-	case "rds_resize":
-		return action.Validate(raw)
-	case "rds_create_snapshot":
-		return action.ValidateRDSCreateSnapshot(raw)
-	case "rds_modify_backup_retention":
-		return action.ValidateRDSModifyBackupRetention(raw)
-	case "rds_reboot_instance":
-		return action.ValidateRDSRebootInstance(raw)
-	case "rds_modify_multi_az":
-		return action.ValidateRDSModifyMultiAZ(raw)
-	case "rds_storage_grow":
-		return action.ValidateRDSStorageGrow(raw)
-	case "rds_delete_snapshot":
-		return action.ValidateRDSDeleteSnapshot(raw)
-	case "rds_create_read_replica":
-		return action.ValidateRDSCreateReadReplica(raw)
-	case "rds_modify_engine_version":
-		return action.ValidateRDSModifyEngineVersion(raw)
-	case "rds_restore_from_snapshot":
-		return action.ValidateRDSRestoreFromSnapshot(raw)
-	}
-	return fmt.Errorf("no validator registered for %q", actionType)
 }
 
 // statusForVerdict maps the policy decision to the proposal's lifecycle
