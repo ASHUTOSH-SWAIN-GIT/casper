@@ -83,8 +83,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /v1/audit", s.handleListAudit)
 	s.mux.HandleFunc("POST /v1/audit/verify", s.handleVerifyAudit)
 
-	// Workspace (read-only environment summary for the dashboard topbar).
+	// Workspace (environment summary + credential management).
 	s.mux.HandleFunc("GET /v1/workspace", s.handleGetWorkspace)
+	s.mux.HandleFunc("PUT /v1/workspace", s.handleUpdateWorkspace)
 }
 
 // withMiddleware wraps the mux with cross-cutting concerns:
