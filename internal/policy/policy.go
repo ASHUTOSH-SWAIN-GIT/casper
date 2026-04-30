@@ -41,6 +41,9 @@ var rulesRDSResize []byte
 //go:embed rules_rds_create_snapshot.rego
 var rulesRDSCreateSnapshot []byte
 
+//go:embed rules_rds_modify_backup_retention.rego
+var rulesRDSModifyBackupRetention []byte
+
 // Decision is the verdict triple. A future v2 may add "irreversible"
 // or "needs_multi_party_approval" — for v1 the three values below are
 // sufficient.
@@ -70,8 +73,9 @@ type Engine struct {
 // if any module is malformed (caught at startup, not at evaluation).
 func NewEngine(ctx context.Context) (*Engine, error) {
 	modules := map[string][]byte{
-		"rds_resize":          rulesRDSResize,
-		"rds_create_snapshot": rulesRDSCreateSnapshot,
+		"rds_resize":                  rulesRDSResize,
+		"rds_create_snapshot":         rulesRDSCreateSnapshot,
+		"rds_modify_backup_retention": rulesRDSModifyBackupRetention,
 	}
 
 	queries := make(map[string]rego.PreparedEvalQuery, len(modules))
@@ -127,4 +131,9 @@ func (e *Engine) EvaluateRDSResize(ctx context.Context, p action.RDSResizePropos
 // EvaluateRDSCreateSnapshot runs the policy against a snapshot proposal.
 func (e *Engine) EvaluateRDSCreateSnapshot(ctx context.Context, p action.RDSCreateSnapshotProposal) (Verdict, error) {
 	return e.evaluate(ctx, "rds_create_snapshot", p)
+}
+
+// EvaluateRDSModifyBackupRetention runs the policy against a backup-retention change proposal.
+func (e *Engine) EvaluateRDSModifyBackupRetention(ctx context.Context, p action.RDSModifyBackupRetentionProposal) (Verdict, error) {
+	return e.evaluate(ctx, "rds_modify_backup_retention", p)
 }

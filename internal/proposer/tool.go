@@ -162,6 +162,63 @@ func buildRDSCreateSnapshotProposeTool(c *captured) tool.Tool {
 	)
 }
 
+// ──────────────────────────────────────────────────────────────────
+// rds_modify_backup_retention action
+// ──────────────────────────────────────────────────────────────────
+
+type rdsModifyBackupRetentionProposeInput struct {
+	DBInstanceIdentifier string `json:"db_instance_identifier" jsonschema:"description=The RDS instance to modify."`
+	Region               string `json:"region" jsonschema:"description=AWS region the instance lives in (e.g. us-east-1)."`
+	CurrentRetentionDays int    `json:"current_retention_days" jsonschema:"description=Current backup retention period in days (must match the snapshot)."`
+	TargetRetentionDays  int    `json:"target_retention_days" jsonschema:"description=Target backup retention period in days. Range 0-35. Setting to 0 disables automated backups."`
+	ApplyImmediately     bool   `json:"apply_immediately" jsonschema:"description=Must be true for v1."`
+	Reasoning            string `json:"reasoning" jsonschema:"description=Short rationale for the retention change."`
+}
+
+func buildRDSModifyBackupRetentionProposeTool(c *captured) tool.Tool {
+	return tool.Typed(
+		"propose_rds_modify_backup_retention",
+		"Emit exactly one structured RDS backup retention change proposal. Call this exactly once with all fields populated.",
+		func(ctx context.Context, in rdsModifyBackupRetentionProposeInput) (proposeOutput, error) {
+			if in.DBInstanceIdentifier == "" {
+				return proposeOutput{}, errors.New("db_instance_identifier required")
+			}
+			raw, err := json.Marshal(in)
+			if err != nil {
+				return proposeOutput{}, fmt.Errorf("marshal proposal: %w", err)
+			}
+			if err := action.ValidateRDSModifyBackupRetention(raw); err != nil {
+				return proposeOutput{}, fmt.Errorf("schema validation: %w", err)
+			}
+			h, err := action.Hash(raw)
+			if err != nil {
+				return proposeOutput{}, fmt.Errorf("hash proposal: %w", err)
+			}
+			c.set(raw, h)
+			return proposeOutput{Hash: string(h)}, nil
+		},
+	)
+}
+
+const rdsModifyBackupRetentionSystemPrompt = `You are Casper's RDS backup-retention proposer.
+
+Your only job is to turn a natural-language intent and an infrastructure snapshot into exactly one structured proposal by calling the propose_rds_modify_backup_retention tool.
+
+Hard constraints:
+- You must call propose_rds_modify_backup_retention exactly ONCE.
+- You must not write any free-form text outside the tool call.
+- "current_retention_days" must equal the snapshot's current retention verbatim (the operator provides this — typically 1, 7, 14, etc.).
+- "target_retention_days" must be in the range 0–35.
+- "apply_immediately" must be true.
+
+How to choose target_retention_days:
+- If the operator asks to "increase" / "extend" retention without specifying a number, default to 14 (a common safer-side value).
+- If the operator names a specific number, use it.
+- Setting target to 0 disables automated backups — only do this if the operator explicitly asks to disable backups, and explain in reasoning. Casper's policy will likely deny this and require human approval.
+- Do not set target equal to current — that's a no-op and will be rejected.
+
+Casper will independently evaluate the proposal against policy and gate it on human approval where appropriate. Reductions in retention are treated more cautiously than extensions because backups older than the new window are immediately deleted.`
+
 const rdsCreateSnapshotSystemPrompt = `You are Casper's RDS snapshot-creation proposer.
 
 Your only job is to turn a natural-language intent and an infrastructure snapshot into exactly one structured proposal by calling the propose_rds_create_snapshot tool.

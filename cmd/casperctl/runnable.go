@@ -117,6 +117,33 @@ func buildRunnable(raw []byte) (*runnable, error) {
 			},
 		}, nil
 
+	case "rds_modify_backup_retention":
+		var p action.RDSModifyBackupRetentionProposal
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return nil, fmt.Errorf("decode proposal: %w", err)
+		}
+		return &runnable{
+			ActionType: "rds_modify_backup_retention",
+			Hash:       h,
+			Region:     p.Region,
+			ProposalAuditPayload: map[string]any{
+				"action_type":            "rds_modify_backup_retention",
+				"db_instance_identifier": p.DBInstanceIdentifier,
+				"region":                 p.Region,
+				"current_retention_days": p.CurrentRetentionDays,
+				"target_retention_days":  p.TargetRetentionDays,
+			},
+			EvaluatePolicy: func(ctx context.Context, e *policy.Engine) (policy.Verdict, error) {
+				return e.EvaluateRDSModifyBackupRetention(ctx, p)
+			},
+			Compile: func() (plan.ExecutionPlan, plan.ExecutionPlan) {
+				return plan.CompileRDSModifyBackupRetention(p, h)
+			},
+			SessionPolicy: func(accountID string) identity.SessionPolicy {
+				return identity.BuildRDSModifyBackupRetentionPolicy(p, accountID)
+			},
+		}, nil
+
 	default:
 		return nil, fmt.Errorf("no runner registered for action type %q", actionType)
 	}
