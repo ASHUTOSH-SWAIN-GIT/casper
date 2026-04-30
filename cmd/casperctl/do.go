@@ -147,11 +147,18 @@ func generateProposal(ctx context.Context, cfg llmCfg, starLog eventlog.EventLog
 	if proposeRegion != "" {
 		region = proposeRegion
 	}
+	if region == "" {
+		if v := os.Getenv("AWS_REGION"); v != "" {
+			region = v
+		} else if v := os.Getenv("AWS_DEFAULT_REGION"); v != "" {
+			region = v
+		}
+	}
 	if instance == "" {
 		return nil, fmt.Errorf("could not determine target instance — pass --instance explicitly")
 	}
 	if region == "" {
-		return nil, fmt.Errorf("could not determine region — pass --region explicitly")
+		return nil, fmt.Errorf("could not determine region — pass --region or set AWS_REGION")
 	}
 
 	snap := proposer.Snapshot{
