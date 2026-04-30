@@ -23,6 +23,9 @@ func readProposal(path string) ([]byte, error) {
 
 // decodeProposal validates and decodes a proposal in one step. Used by
 // subcommands that need the typed struct (compile, run, policy).
+//
+// Today this only handles rds_resize — multi-action subcommands use
+// detectActionType + per-action validators directly.
 func decodeProposal(raw []byte) (action.RDSResizeProposal, action.ProposalHash, error) {
 	if err := action.Validate(raw); err != nil {
 		return action.RDSResizeProposal{}, "", fmt.Errorf("invalid proposal: %w", err)
@@ -36,6 +39,43 @@ func decodeProposal(raw []byte) (action.RDSResizeProposal, action.ProposalHash, 
 		return action.RDSResizeProposal{}, "", err
 	}
 	return p, h, nil
+}
+
+// detectActionType picks the action type from a proposal's shape.
+// Today proposals don't carry an explicit action_type field, so we
+// detect by which unique field is present. If/when proposals start
+// carrying an explicit action_type, we honor that first.
+//
+// Adding a new action: add a case here. Failing to detect returns an
+// error — better than silently routing to the wrong action.
+func detectActionType(raw []byte) (string, error) {
+	var probe map[string]any
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return "", fmt.Errorf("parse proposal: %w", err)
+	}
+	if v, ok := probe["action_type"].(string); ok && v != "" {
+		return v, nil // explicit field wins (forward-compat)
+	}
+	switch {
+	case probe["target_instance_class"] != nil:
+		return "rds_resize", nil
+	case probe["snapshot_identifier"] != nil:
+		return "rds_create_snapshot", nil
+	}
+	return "", fmt.Errorf("could not detect action type from proposal shape (no recognizable discriminator field)")
+}
+
+// validateForActionType dispatches to the correct schema validator
+// based on the detected action type.
+func validateForActionType(raw []byte, actionType string) error {
+	switch actionType {
+	case "rds_resize":
+		return action.Validate(raw)
+	case "rds_create_snapshot":
+		return action.ValidateRDSCreateSnapshot(raw)
+	default:
+		return fmt.Errorf("no validator registered for action type %q", actionType)
+	}
 }
 
 // openAuditStore picks an audit.Store based on flags + env. forceMemory

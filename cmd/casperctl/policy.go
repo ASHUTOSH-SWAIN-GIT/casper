@@ -13,19 +13,17 @@ import (
 var policyCmd = &cobra.Command{
 	Use:   "policy <proposal.json>",
 	Short: "Evaluate a proposal against the policy engine",
-	Long: `Runs the embedded Rego policy against a proposal and prints the
-verdict (allow / deny / needs_approval) plus the reason that fired.
+	Long: `Detects the proposal's action type, runs the matching Rego rules,
+and prints the verdict (allow / deny / needs_approval) plus the reason.
 
-This subcommand is read-only — it never makes AWS calls and never writes
-audit events. Use it to check whether a proposal would pass the policy
-gate before invoking 'run'.`,
+Read-only — never makes AWS calls or writes audit events.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		raw, err := readProposal(args[0])
 		if err != nil {
 			return err
 		}
-		p, _, err := decodeProposal(raw)
+		r, err := buildRunnable(raw)
 		if err != nil {
 			return err
 		}
@@ -35,13 +33,18 @@ gate before invoking 'run'.`,
 		if err != nil {
 			return err
 		}
-		v, err := engine.EvaluateRDSResize(ctx, p)
+		v, err := r.EvaluatePolicy(ctx, engine)
 		if err != nil {
 			return err
 		}
+		out := map[string]any{
+			"action_type": r.ActionType,
+			"decision":    v.Decision,
+			"reason":      v.Reason,
+		}
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
-		return enc.Encode(v)
+		return enc.Encode(out)
 	},
 }
 
