@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://casper.dev/schemas/rds_snapshot_and_resize.schema.json",
+  "title": "RDSSnapshotAndResizeProposal",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "action_type",
+    "db_instance_identifier",
+    "region",
+    "snapshot_identifier",
+    "current_instance_class",
+    "target_instance_class",
+    "reasoning"
+  ],
+  "properties": {
+    "action_type": {
+      "type": "string",
+      "const": "rds_snapshot_and_resize"
+    },
+    "db_instance_identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 63,
+      "pattern": "^[a-zA-Z][a-zA-Z0-9-]*$"
+    },
+    "region": {
+      "type": "string",
+      "pattern": "^[a-z]{2}-[a-z]+-[0-9]+$"
+    },
+    "snapshot_identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255,
+      "pattern": "^[a-zA-Z][a-zA-Z0-9-]*$"
+    },
+    "current_instance_class": {
+      "type": "string",
+      "pattern": "^db\\."
+    },
+    "target_instance_class": {
+      "type": "string",
+      "pattern": "^db\\."
+    },
+    "reasoning": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}
